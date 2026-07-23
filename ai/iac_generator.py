@@ -53,7 +53,11 @@ def generate(spec: dict, provider: str, environment: str,
     """Ask the model to assemble Terraform, then WRITE it (nothing is applied here).
     Returns the path to the generated file.
     """
-    client = client or GeminiClient()
+    if client is None:
+        # Model is data-driven (platform.json generation.model). flash-lite has a
+        # much higher free-tier allowance than flash, so it's the default.
+        model = spec.get("generation", {}).get("model", "gemini-2.5-flash-lite")
+        client = GeminiClient(model=model)
     tf = client.ask(build_brief(spec, provider, environment))
     out_dir = out_dir or os.path.join("infra", "generated", provider)
     os.makedirs(out_dir, exist_ok=True)

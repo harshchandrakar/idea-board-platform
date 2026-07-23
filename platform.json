@@ -67,5 +67,5 @@
     "watch_interval_seconds": 60
   },
 
-  "generation": { "temperature": 0, "max_fix_attempts": 3 }
+  "generation": { "temperature": 0, "max_fix_attempts": 3, "model": "gemini-2.5-flash-lite" }
 }
