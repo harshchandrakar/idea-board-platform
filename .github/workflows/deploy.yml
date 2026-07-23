@@ -1,69 +1,27 @@
 name: Deploy Idea Board
-# ONE pipeline for every target.
-#   target = free-tier-vm   -> build to GHCR, helm-deploy to a single k3s VM (≈$0, AWS or GCP)
-#   target = managed-cloud  -> generate+validate IaC from platform.json, apply to
-#                              the chosen cloud (aws/gcp), canary, then the agent.
-# Adding a new cloud is a platform.json block, NOT a new pipeline.
+# Managed-cloud pipeline: build images -> generate & validate IaC from
+# platform.json -> apply to the cloud -> canary -> the agent decides.
+# Default cloud is GCP in Mumbai (asia-south1); GCP auth is KEYLESS (OIDC / WIF).
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: "where to deploy (ignored if goal is set — AI picks then)"
-        type: choice
-        options: [free-tier-vm, managed-cloud]
-        default: free-tier-vm
       cloud:
-        description: "managed-cloud only: which provider"
+        description: "which provider to deploy to"
         type: choice
-        options: [aws, gcp]
-        default: aws
+        options: [gcp, aws]
+        default: gcp
       environment:
-        description: "managed-cloud only: staging or production"
+        description: "staging or production"
         type: choice
         options: [staging, production]
         default: staging
       goal:
-        description: "optional plain-English goal — if set, AI picks target/cloud/env"
+        description: "optional plain-English goal (feeds AI sizing)"
         required: false
 
 jobs:
   # --------------------------------------------------------------------------
-  # AI delivery planner (safe): resolves WHERE to deploy. If a goal is given, the
-  # LLM picks target/cloud/environment from platform.json's `delivery` block
-  # (validated against the allowlist, rule-based fallback). With no goal, the
-  # explicit inputs are used as-is. Only CHOICES are AI-driven; this YAML is static.
-  # --------------------------------------------------------------------------
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      target: ${{ steps.p.outputs.target }}
-      cloud: ${{ steps.p.outputs.cloud }}
-      environment: ${{ steps.p.outputs.environment }}
-    env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - id: p
-        run: |
-          if [ -n "${{ inputs.goal }}" ]; then
-            python -m ai.plan_delivery --github-output \
-              "${{ inputs.goal }} ${{ inputs.cloud }} ${{ inputs.environment }}"
-          else
-            {
-              echo "target=${{ inputs.target }}"
-              echo "cloud=${{ inputs.cloud }}"
-              echo "environment=${{ inputs.environment }}"
-            } >> "$GITHUB_OUTPUT"
-          fi
-      - name: Show resolved plan
-        run: |
-          echo "target=${{ steps.p.outputs.target }} cloud=${{ steps.p.outputs.cloud }} env=${{ steps.p.outputs.environment }}"
-
-  # --------------------------------------------------------------------------
-  # Shared: build the app images and push them to GHCR (free). Both targets use
-  # these images, so it runs once regardless of where we deploy.
+  # Build the app images and push them to GHCR (free).
   # --------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
@@ -97,42 +55,18 @@ jobs:
           docker push "$REG/frontend:$SHA"; docker push "$REG/frontend:latest"
 
   # --------------------------------------------------------------------------
-  # Target A: one free-tier VM running k3s (AWS EC2 t3.micro OR GCP e2-micro).
-  # Deploy the Helm chart over SSH. Cloud-neutral — a VM is a VM. ≈$0.
+  # Managed cloud: GKE/EKS via generated Terraform. Real infra, real cost
+  # (GCP: covered by the $300 / 90-day trial credit). Region comes from
+  # platform.json (gcp = asia-south1 / Mumbai).
   # --------------------------------------------------------------------------
-  free-tier-vm:
-    needs: [build, plan]
-    if: ${{ needs.plan.outputs.target == 'free-tier-vm' }}
+  deploy:
+    needs: build
     runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to k3s over SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VM_HOST }}
-          # AWS Ubuntu default = "ubuntu"; GCP = your login name. Set VM_USER for GCP.
-          username: ${{ secrets.VM_USER != '' && secrets.VM_USER || 'ubuntu' }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          command_timeout: 8m
-          script: |
-            set -euo pipefail
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-            OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-            REG="ghcr.io/$OWNER"; SHA="${{ github.sha }}"; IP="$(curl -s ifconfig.me)"
-            cd ~/idea-board-platform && git pull --ff-only || true
-            helm upgrade --install idea deploy/helm \
-              --set image.backend="$REG/backend:$SHA" \
-              --set image.frontend="$REG/frontend:$SHA" \
-              --set ingress.host="$IP.nip.io" --wait --timeout 5m
-            echo "Deployed. Open: http://$IP.nip.io"
-
-  # --------------------------------------------------------------------------
-  # Target B: managed cloud (EKS/GKE via generated Terraform). Real infra, real
-  # cost. Same file, selected by target=managed-cloud + cloud input.
-  # --------------------------------------------------------------------------
-  managed-cloud:
-    needs: [build, plan]
-    if: ${{ needs.plan.outputs.target == 'managed-cloud' }}
-    runs-on: ubuntu-latest
+    # id-token: write lets GitHub mint the OIDC token GCP exchanges for access —
+    # this is what makes keyless (Workload Identity Federation) auth work.
+    permissions:
+      contents: read
+      id-token: write
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
@@ -160,18 +94,19 @@ jobs:
           tar xzf /tmp/c.tgz -C /tmp && sudo mv /tmp/conftest /usr/local/bin/
 
       # --- cloud auth (only the matching one runs) ---
+      - name: GCP credentials (keyless / OIDC — no key file)
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - name: AWS credentials
-        if: ${{ needs.plan.outputs.cloud == 'aws' }}
+        if: ${{ inputs.cloud == 'aws' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-      - name: GCP credentials
-        if: ${{ needs.plan.outputs.cloud == 'gcp' }}
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       # --- advisory AI steps ---
       - name: AI summary (advisory)
@@ -182,8 +117,8 @@ jobs:
       # --- Part C: generate IaC, then the validation gauntlet ---
       - name: Generate & validate IaC
         run: |
-          python -m ai.iac_generator generate --provider ${{ needs.plan.outputs.cloud }} --env ${{ needs.plan.outputs.environment }}
-          cd infra/generated/${{ needs.plan.outputs.cloud }}
+          python -m ai.iac_generator generate --provider ${{ inputs.cloud }} --env ${{ inputs.environment }}
+          cd infra/generated/${{ inputs.cloud }}
           terraform init -input=false
           terraform fmt -check
           terraform validate
@@ -194,7 +129,7 @@ jobs:
 
       - name: Terraform apply (only if every gate passed)
         run: |
-          cd infra/generated/${{ needs.plan.outputs.cloud }}
+          cd infra/generated/${{ inputs.cloud }}
           terraform apply -auto-approve plan.bin
           terraform output -raw kubeconfig   > /tmp/kubeconfig
           terraform output -raw database_url > /tmp/dburl

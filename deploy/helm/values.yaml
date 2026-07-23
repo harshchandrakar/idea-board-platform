@@ -13,8 +13,8 @@ service:
 # CPU request to measure "% used" against).
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 1          # cheapest: one pod each; scales up only under load
+  maxReplicas: 3
   targetCPUUtilizationPercentage: 70
 
 # Per-pod CPU/memory. `requests` = guaranteed reservation (and the HPA baseline);

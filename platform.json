@@ -14,7 +14,7 @@
   },
 
   "sizing": {
-    "cost-sensitive":    { "node_count": 2, "node_size": "small",  "db_size": "small",  "replicas": 2 },
+    "cost-sensitive":    { "node_count": 1, "node_size": "small",  "db_size": "small",  "replicas": 1 },
     "high-availability": { "node_count": 3, "node_size": "medium", "db_size": "medium", "replicas": 3 }
   },
 
@@ -65,28 +65,6 @@
     "max_node_increase": 2,
     "retry_budget": 3,
     "watch_interval_seconds": 60
-  },
-
-  "delivery": {
-    "default_target": "free-tier-vm",
-    "targets": {
-      "free-tier-vm": {
-        "cost": "free",
-        "orchestrator": "k3s",
-        "managed_db": false,
-        "description": "one free-tier VM running k3s; app uses SQLite. ~$0. Works on any cloud: AWS t3.micro or GCP e2-micro (Always Free)."
-      },
-      "managed-cloud": {
-        "cost": "paid",
-        "orchestrator": "kubernetes",
-        "managed_db": true,
-        "description": "EKS/GKE via generated Terraform + managed Postgres. Real cost (GCP: covered by the $300/90-day trial credit)."
-      }
-    },
-    "clouds": {
-      "aws": { "free_tier_target": "free-tier-vm", "paid_target": "managed-cloud" },
-      "gcp": { "free_tier_target": "free-tier-vm", "paid_target": "managed-cloud" }
-    }
   },
 
   "generation": { "temperature": 0, "max_fix_attempts": 3 }
