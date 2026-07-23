@@ -64,6 +64,27 @@ def test_assert_nondestructive_allows_create_only():
     assert iac.assert_nondestructive(plan, ["aws_db_instance"]) == []
 
 
+def test_strip_code_fences_removes_markdown():
+    fenced = "```terraform\nresource \"x\" \"y\" {}\n```"
+    out = iac.strip_code_fences(fenced)
+    assert "```" not in out
+    assert out.startswith('resource "x" "y"')
+
+
+def test_strip_code_fences_leaves_plain_hcl():
+    plain = 'resource "x" "y" {}\n'
+    assert iac.strip_code_fences(plain).strip() == 'resource "x" "y" {}'
+
+
+def test_generate_strips_fences_before_writing(tmp_path):
+    spec = iac.load_spec(SPEC)
+    client = ScriptedLLMClient(["```terraform\n" + GOOD_TF + "\n```"])
+    path = iac.generate(spec, "aws", "staging", client=client, out_dir=str(tmp_path))
+    tf = open(path, encoding="utf-8").read()
+    assert "```" not in tf                      # fences stripped
+    assert 'output "kubeconfig"' in tf
+
+
 def test_generate_writes_file(tmp_path):
     spec = iac.load_spec(SPEC)
     client = ScriptedLLMClient([GOOD_TF])

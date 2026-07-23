@@ -5,3 +5,6 @@ Generate Terraform for this provider. You MUST:
 - declare exactly these outputs: {{required_outputs}}
 - invent NOTHING: no new resource types, no made-up arguments, no version guesses.
 Region: {{region}}. Sizing: {{sizing}}.
+
+Output RAW Terraform HCL only. Do NOT wrap it in markdown code fences (no ```), and
+add no prose before or after — the response must start with a Terraform block.

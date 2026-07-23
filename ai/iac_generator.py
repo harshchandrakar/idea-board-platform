@@ -48,6 +48,22 @@ def build_brief(spec: dict, provider: str, environment: str) -> str:
     )
 
 
+def strip_code_fences(text: str) -> str:
+    """Remove markdown code fences the model sometimes wraps around output.
+
+    Turns ```terraform\\n<hcl>\\n``` (or ```hcl / ```) into raw HCL, so what we
+    write to main.tf is valid Terraform, not a markdown block.
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        lines = lines[1:]  # drop the opening ``` / ```terraform / ```hcl line
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]  # drop the closing fence
+        t = "\n".join(lines)
+    return t.strip() + "\n"
+
+
 def generate(spec: dict, provider: str, environment: str,
              client: LLMClient | None = None, out_dir: str | None = None) -> str:
     """Ask the model to assemble Terraform, then WRITE it (nothing is applied here).
@@ -58,7 +74,7 @@ def generate(spec: dict, provider: str, environment: str,
         # much higher free-tier allowance than flash, so it's the default.
         model = spec.get("generation", {}).get("model", "gemini-3.5-flash-lite")
         client = GeminiClient(model=model)
-    tf = client.ask(build_brief(spec, provider, environment))
+    tf = strip_code_fences(client.ask(build_brief(spec, provider, environment)))
     out_dir = out_dir or os.path.join("infra", "generated", provider)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "main.tf")
