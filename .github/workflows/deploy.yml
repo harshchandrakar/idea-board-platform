@@ -108,11 +108,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # --- advisory AI steps ---
-      - name: AI summary (advisory)
-        run: python ai/summarize.py || true
-      - name: AI propose config (advisory — logs suggested sizing)
-        run: python -m ai.propose_config '${{ inputs.goal }}' || true
+      # (Advisory Gemini calls—summary/propose-config—are intentionally omitted here
+      #  to conserve free-tier quota for the essential IaC generation below.)
 
       # --- Part C: generate IaC, then the validation gauntlet ---
       - name: Generate & validate IaC

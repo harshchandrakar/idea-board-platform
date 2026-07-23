@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 
@@ -22,9 +24,11 @@ class GeminiClient(LLMClient):
 
     ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def __init__(self, model: str = "gemini-2.5-flash", timeout: int = 30):
+    def __init__(self, model: str = "gemini-2.5-flash", timeout: int = 30,
+                 max_retries: int = 4):
         self.model = model
         self.timeout = timeout
+        self.max_retries = max_retries
         self.key = os.environ["GEMINI_API_KEY"]  # raises early if missing
 
     def ask(self, prompt: str) -> str:
@@ -37,14 +41,28 @@ class GeminiClient(LLMClient):
         ).encode()
         # Pass the key as a header (x-goog-api-key). This works for both the new
         # AQ.* "auth keys" and legacy AIza keys, and keeps the key out of URLs/logs.
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json", "x-goog-api-key": self.key},
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            data = json.load(r)
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.key}
+
+        last_err: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                req = urllib.request.Request(url, data=body, headers=headers)
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    data = json.load(r)
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except urllib.error.HTTPError as e:
+                last_err = e
+                # 429 (rate limit) / 503 (overloaded) are transient — back off and retry.
+                if e.code in (429, 503) and attempt < self.max_retries - 1:
+                    retry_after = e.headers.get("Retry-After") if e.headers else None
+                    delay = int(retry_after) if (retry_after and retry_after.isdigit()) \
+                        else min(2 ** attempt * 5, 40)
+                    print(f"[ai] {e.code}; retrying in {delay}s "
+                          f"(attempt {attempt + 1}/{self.max_retries})", file=sys.stderr)
+                    time.sleep(delay)
+                    continue
+                raise
+        raise last_err  # pragma: no cover
 
 
 class ScriptedLLMClient(LLMClient):
