@@ -1,39 +1,86 @@
 name: Deploy Idea Board
+# ONE pipeline for every target.
+#   target = free-tier-vm   -> build to GHCR, helm-deploy to a single k3s VM (≈$0, AWS or GCP)
+#   target = managed-cloud  -> generate+validate IaC from platform.json, apply to
+#                              the chosen cloud (aws/gcp), canary, then the agent.
+# Adding a new cloud is a platform.json block, NOT a new pipeline.
 on:
   workflow_dispatch:
     inputs:
-      cloud:       { description: "aws or gcp", required: true, default: "aws" }
-      environment: { description: "staging or production", required: true, default: "staging" }
-      goal:        { description: "e.g. cost-sensitive staging", required: false }
+      target:
+        description: "where to deploy (ignored if goal is set — AI picks then)"
+        type: choice
+        options: [free-tier-vm, managed-cloud]
+        default: free-tier-vm
+      cloud:
+        description: "managed-cloud only: which provider"
+        type: choice
+        options: [aws, gcp]
+        default: aws
+      environment:
+        description: "managed-cloud only: staging or production"
+        type: choice
+        options: [staging, production]
+        default: staging
+      goal:
+        description: "optional plain-English goal — if set, AI picks target/cloud/env"
+        required: false
 
 jobs:
-  ship:
+  # --------------------------------------------------------------------------
+  # AI delivery planner (safe): resolves WHERE to deploy. If a goal is given, the
+  # LLM picks target/cloud/environment from platform.json's `delivery` block
+  # (validated against the allowlist, rule-based fallback). With no goal, the
+  # explicit inputs are used as-is. Only CHOICES are AI-driven; this YAML is static.
+  # --------------------------------------------------------------------------
+  plan:
     runs-on: ubuntu-latest
-    # GHCR (free) needs the job's GITHUB_TOKEN to be allowed to write packages.
+    outputs:
+      target: ${{ steps.p.outputs.target }}
+      cloud: ${{ steps.p.outputs.cloud }}
+      environment: ${{ steps.p.outputs.environment }}
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - id: p
+        run: |
+          if [ -n "${{ inputs.goal }}" ]; then
+            python -m ai.plan_delivery --github-output \
+              "${{ inputs.goal }} ${{ inputs.cloud }} ${{ inputs.environment }}"
+          else
+            {
+              echo "target=${{ inputs.target }}"
+              echo "cloud=${{ inputs.cloud }}"
+              echo "environment=${{ inputs.environment }}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Show resolved plan
+        run: |
+          echo "target=${{ steps.p.outputs.target }} cloud=${{ steps.p.outputs.cloud }} env=${{ steps.p.outputs.environment }}"
+
+  # --------------------------------------------------------------------------
+  # Shared: build the app images and push them to GHCR (free). Both targets use
+  # these images, so it runs once regardless of where we deploy.
+  # --------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
       SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
-      # Default to GitHub's free container registry (GHCR). Override by setting
-      # a REGISTRY secret (e.g. Docker Hub) if you ever want a different one.
-      - name: Resolve container registry
+      - name: Resolve registry (GHCR, override with REGISTRY secret)
         run: |
-          if [ -n "${{ secrets.REGISTRY }}" ]; then
-            REG="${{ secrets.REGISTRY }}"
-          else
-            OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-            REG="ghcr.io/$OWNER"
-          fi
+          if [ -n "${{ secrets.REGISTRY }}" ]; then REG="${{ secrets.REGISTRY }}";
+          else REG="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"; fi
           echo "REG=$REG" >> "$GITHUB_ENV"
-          echo "Using registry: $REG"
 
-      # Log in to GHCR with the automatic GITHUB_TOKEN — no extra secret needed.
       - name: Log in to GHCR
         if: startsWith(env.REG, 'ghcr.io')
         uses: docker/login-action@v3
@@ -42,34 +89,112 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build & push images
+        run: |
+          docker build -t "$REG/backend:$SHA"  -t "$REG/backend:latest"  app/backend
+          docker build -t "$REG/frontend:$SHA" -t "$REG/frontend:latest" app/frontend
+          docker push "$REG/backend:$SHA";  docker push "$REG/backend:latest"
+          docker push "$REG/frontend:$SHA"; docker push "$REG/frontend:latest"
+
+  # --------------------------------------------------------------------------
+  # Target A: one free-tier VM running k3s (AWS EC2 t3.micro OR GCP e2-micro).
+  # Deploy the Helm chart over SSH. Cloud-neutral — a VM is a VM. ≈$0.
+  # --------------------------------------------------------------------------
+  free-tier-vm:
+    needs: [build, plan]
+    if: ${{ needs.plan.outputs.target == 'free-tier-vm' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to k3s over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          # AWS Ubuntu default = "ubuntu"; GCP = your login name. Set VM_USER for GCP.
+          username: ${{ secrets.VM_USER != '' && secrets.VM_USER || 'ubuntu' }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+            REG="ghcr.io/$OWNER"; SHA="${{ github.sha }}"; IP="$(curl -s ifconfig.me)"
+            cd ~/idea-board-platform && git pull --ff-only || true
+            helm upgrade --install idea deploy/helm \
+              --set image.backend="$REG/backend:$SHA" \
+              --set image.frontend="$REG/frontend:$SHA" \
+              --set ingress.host="$IP.nip.io" --wait --timeout 5m
+            echo "Deployed. Open: http://$IP.nip.io"
+
+  # --------------------------------------------------------------------------
+  # Target B: managed cloud (EKS/GKE via generated Terraform). Real infra, real
+  # cost. Same file, selected by target=managed-cloud + cloud input.
+  # --------------------------------------------------------------------------
+  managed-cloud:
+    needs: [build, plan]
+    if: ${{ needs.plan.outputs.target == 'managed-cloud' }}
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve registry
+        run: |
+          if [ -n "${{ secrets.REGISTRY }}" ]; then REG="${{ secrets.REGISTRY }}";
+          else REG="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"; fi
+          echo "REG=$REG" >> "$GITHUB_ENV"
+
+      # --- toolchain the gauntlet needs ---
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install python deps
+        run: pip install -r ai/requirements.txt
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - name: Install conftest
+        run: |
+          V=0.56.0
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${V}/conftest_${V}_Linux_x86_64.tar.gz" -o /tmp/c.tgz
+          tar xzf /tmp/c.tgz -C /tmp && sudo mv /tmp/conftest /usr/local/bin/
+
+      # --- cloud auth (only the matching one runs) ---
+      - name: AWS credentials
+        if: ${{ needs.plan.outputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: GCP credentials
+        if: ${{ needs.plan.outputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # --- advisory AI steps ---
       - name: AI summary (advisory)
         run: python ai/summarize.py || true
-
       - name: AI propose config
         run: echo "config=$(python -m ai.propose_config '${{ inputs.goal }}')" >> "$GITHUB_OUTPUT"
 
-      - name: Build & push images
-        run: |
-          docker build -t "$REG/backend:$SHA"  app/backend
-          docker build -t "$REG/frontend:$SHA" app/frontend
-          docker push "$REG/backend:$SHA" && docker push "$REG/frontend:$SHA"
-
-      # --- Part C: generate IaC from platform.json, then run the GAUNTLET ---
+      # --- Part C: generate IaC, then the validation gauntlet ---
       - name: Generate & validate IaC
         run: |
-          python -m ai.iac_generator generate --provider ${{ inputs.cloud }} --env ${{ inputs.environment }}
-          cd infra/generated/${{ inputs.cloud }}
+          python -m ai.iac_generator generate --provider ${{ needs.plan.outputs.cloud }} --env ${{ needs.plan.outputs.environment }}
+          cd infra/generated/${{ needs.plan.outputs.cloud }}
           terraform init -input=false
           terraform fmt -check
           terraform validate
           terraform plan -out plan.bin
           terraform show -json plan.bin > plan.json
-          conftest test plan.json --policy ../../policy         # gate 4: policy
-          python ../../../ai/iac_generator.py assert-nondestructive plan.json  # gate 6
+          conftest test plan.json --policy ../../policy
+          python ../../../ai/iac_generator.py assert-nondestructive plan.json
 
       - name: Terraform apply (only if every gate passed)
         run: |
-          cd infra/generated/${{ inputs.cloud }}
+          cd infra/generated/${{ needs.plan.outputs.cloud }}
           terraform apply -auto-approve plan.bin
           terraform output -raw kubeconfig   > /tmp/kubeconfig
           terraform output -raw database_url > /tmp/dburl

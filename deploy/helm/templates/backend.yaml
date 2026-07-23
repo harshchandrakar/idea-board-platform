@@ -18,9 +18,13 @@ spec:
           image: {{ .Values.image.backend | quote }}
           ports:
             - containerPort: {{ .Values.service.backendPort }}
+          {{- if .Values.databaseUrl }}
           env:
+            # Only injected when a real DB URL is provided (e.g. RDS). Left unset,
+            # the backend falls back to a local SQLite file — no database to pay for.
             - name: DATABASE_URL
               value: {{ .Values.databaseUrl | quote }}
+          {{- end }}
           resources: {{- toYaml .Values.resources.backend | nindent 12 }}
           readinessProbe:
             httpGet: { path: /api/health, port: {{ .Values.service.backendPort }} }
