@@ -56,7 +56,7 @@ def generate(spec: dict, provider: str, environment: str,
     if client is None:
         # Model is data-driven (platform.json generation.model). flash-lite has a
         # much higher free-tier allowance than flash, so it's the default.
-        model = spec.get("generation", {}).get("model", "gemini-2.5-flash-lite")
+        model = spec.get("generation", {}).get("model", "gemini-3.5-flash-lite")
         client = GeminiClient(model=model)
     tf = client.ask(build_brief(spec, provider, environment))
     out_dir = out_dir or os.path.join("infra", "generated", provider)

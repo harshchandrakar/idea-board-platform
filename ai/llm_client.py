@@ -24,7 +24,7 @@ class GeminiClient(LLMClient):
 
     ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def __init__(self, model: str = "gemini-2.5-flash", timeout: int = 30,
+    def __init__(self, model: str = "gemini-3.5-flash-lite", timeout: int = 30,
                  max_retries: int = 4):
         self.model = model
         self.timeout = timeout

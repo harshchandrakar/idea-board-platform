@@ -15,7 +15,7 @@ def main(goal: str):
     fallback = {"node_count": 2, "node_size": "small", "db_size": "small",
                 "replica_count": 2, "reason": "AI unavailable; safe defaults."}
     try:
-        client = GeminiClient(model="gemini-2.5-flash")
+        client = GeminiClient(model="gemini-3.5-flash-lite")
     except Exception:
         print(json.dumps(fallback))
         return

@@ -19,7 +19,7 @@ def git_changes():
 def main():
     prompt = render("summarize", changes=git_changes())
     try:
-        print(GeminiClient(model="gemini-2.5-flash-lite").ask(prompt))
+        print(GeminiClient(model="gemini-3.5-flash-lite").ask(prompt))
     except Exception:
         print("• Automated summary unavailable (AI rate-limited). See commit list.")
 
