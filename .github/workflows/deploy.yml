@@ -117,7 +117,7 @@ jobs:
           python -m ai.iac_generator generate --provider ${{ inputs.cloud }} --env ${{ inputs.environment }}
           cd infra/generated/${{ inputs.cloud }}
           terraform init -input=false
-          terraform fmt -check
+          terraform fmt          # auto-format (LLM output isn't always canonical); non-gating
           terraform validate
           terraform plan -out plan.bin
           terraform show -json plan.bin > plan.json
