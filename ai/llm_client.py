@@ -27,15 +27,19 @@ class GeminiClient(LLMClient):
         self.key = os.environ["GEMINI_API_KEY"]  # raises early if missing
 
     def ask(self, prompt: str) -> str:
-        url = f"{self.ENDPOINT}/{self.model}:generateContent?key={self.key}"
+        url = f"{self.ENDPOINT}/{self.model}:generateContent"
         body = json.dumps(
             {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0},
             }
         ).encode()
+        # Pass the key as a header (x-goog-api-key). This works for both the new
+        # AQ.* "auth keys" and legacy AIza keys, and keeps the key out of URLs/logs.
         req = urllib.request.Request(
-            url, data=body, headers={"Content-Type": "application/json"}
+            url,
+            data=body,
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.key},
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             data = json.load(r)
