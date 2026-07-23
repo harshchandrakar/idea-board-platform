@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.request
 from abc import ABC, abstractmethod
 
@@ -77,5 +78,7 @@ def ask_json(client: LLMClient, prompt: str, fallback: dict) -> dict:
                 raw = raw[4:]
         return json.loads(raw.strip())
     except Exception as e:  # noqa: BLE001 - deliberately broad; we must not crash
-        print(f"[ai] falling back (reason: {e})")
+        # stderr, so diagnostics never pollute stdout that a caller may capture
+        # (e.g. `config=$(python -m ai.propose_config ...)` in CI).
+        print(f"[ai] falling back (reason: {e})", file=sys.stderr)
         return dict(fallback)

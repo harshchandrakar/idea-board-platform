@@ -111,8 +111,8 @@ jobs:
       # --- advisory AI steps ---
       - name: AI summary (advisory)
         run: python ai/summarize.py || true
-      - name: AI propose config
-        run: echo "config=$(python -m ai.propose_config '${{ inputs.goal }}')" >> "$GITHUB_OUTPUT"
+      - name: AI propose config (advisory — logs suggested sizing)
+        run: python -m ai.propose_config '${{ inputs.goal }}' || true
 
       # --- Part C: generate IaC, then the validation gauntlet ---
       - name: Generate & validate IaC
