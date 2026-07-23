@@ -1,0 +1,27 @@
+{{- if .Values.watcher.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: idea-agent-watcher
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.watcher.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: agent
+              image: {{ .Values.image.agent | quote }}
+              args: ["python", "-m", "ai.agent", "watch", "--endpoint", {{ .Values.watcher.endpoint | quote }}]
+              env:
+                - name: AGENT_AUTONOMY
+                  value: {{ .Values.watcher.autonomy | quote }}
+                - name: GEMINI_API_KEY
+                  valueFrom: { secretKeyRef: { name: idea-secrets, key: gemini } }
+                - name: LANGSMITH_API_KEY
+                  valueFrom: { secretKeyRef: { name: idea-secrets, key: langsmith } }
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: {{ .Values.observability.otelEndpoint | quote }}
+{{- end }}

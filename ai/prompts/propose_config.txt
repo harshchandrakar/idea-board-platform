@@ -1,0 +1,1 @@
+A developer wants a "{{goal}}" environment. Propose infrastructure sizing. Choose node_size and db_size from ["small","medium","large"]. Return JSON: {"node_count": int, "node_size": str, "db_size": str, "replica_count": int, "reason": str}

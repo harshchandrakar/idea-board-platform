@@ -1,0 +1,25 @@
+# Minimal OpenTelemetry Collector config (Part G). Fans out: agent traces to
+# LangSmith, system metrics to a Prometheus scrape endpoint.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  labels: {{- include "idea.labels" . | nindent 4 }}
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http: { endpoint: 0.0.0.0:4318 }
+    exporters:
+      otlphttp/langsmith:
+        endpoint: {{ .Values.observability.otelEndpoint | quote }}
+        headers:
+          x-api-key: "${LANGSMITH_API_KEY}"
+          Langsmith-Project: "idea-board"
+      prometheus:
+        endpoint: 0.0.0.0:9090
+    service:
+      pipelines:
+        traces:  { receivers: [otlp], exporters: [otlphttp/langsmith] }
+        metrics: { receivers: [otlp], exporters: [prometheus] }

@@ -1,0 +1,71 @@
+{
+  "app": {
+    "name": "idea-board",
+    "services": {
+      "backend":  { "image": "REG/backend",  "port": 8000, "health": "/api/health" },
+      "frontend": { "image": "REG/frontend", "port": 80 }
+    },
+    "database": { "engine": "postgres", "version": "16" }
+  },
+
+  "environments": {
+    "staging":    { "intent": "cost-sensitive",   "autonomy": "L2" },
+    "production": { "intent": "high-availability", "autonomy": "L1" }
+  },
+
+  "sizing": {
+    "cost-sensitive":    { "node_count": 2, "node_size": "small",  "db_size": "small",  "replicas": 2 },
+    "high-availability": { "node_count": 3, "node_size": "medium", "db_size": "medium", "replicas": 3 }
+  },
+
+  "contract": { "required_outputs": ["kubeconfig", "database_url", "app_endpoint"] },
+
+  "providers": {
+    "aws": {
+      "region":  "eu-west-1",
+      "cluster": { "module": "terraform-aws-modules/eks/aws", "version": "20.8.4" },
+      "database": { "resource": "aws_db_instance", "engine": "postgres" },
+      "size_map": {
+        "node": { "small": "t3.small",   "medium": "t3.large" },
+        "db":   { "small": "db.t3.micro", "medium": "db.t3.medium" }
+      },
+      "allowed_resources": [
+        "aws_vpc", "aws_subnet", "aws_security_group",
+        "aws_db_instance", "aws_iam_role", "module.eks"
+      ]
+    },
+    "gcp": {
+      "region":  "europe-west1",
+      "cluster": { "module": "terraform-google-modules/kubernetes-engine/google", "version": "31.0.0" },
+      "database": { "resource": "google_sql_database_instance" },
+      "size_map": {
+        "node": { "small": "e2-small",    "medium": "e2-standard-4" },
+        "db":   { "small": "db-f1-micro", "medium": "db-custom-2-7680" }
+      },
+      "allowed_resources": [
+        "google_compute_network", "google_compute_subnetwork",
+        "google_sql_database_instance", "google_service_account", "module.gke"
+      ]
+    }
+  },
+
+  "policy": {
+    "regions_allowed": { "aws": ["eu-west-1", "us-east-1"], "gcp": ["europe-west1"] },
+    "max_node_count": 6,
+    "db_must_be_private": true,
+    "require_tags": ["env", "managed-by"],
+    "protect_from_destroy": ["aws_db_instance", "google_sql_database_instance"]
+  },
+
+  "agent": {
+    "autonomy_default": "L2",
+    "canary_percent": 10,
+    "error_rate_threshold": 0.02,
+    "replica_bounds": [2, 8],
+    "max_node_increase": 2,
+    "retry_budget": 3,
+    "watch_interval_seconds": 60
+  },
+
+  "generation": { "temperature": 0, "max_fix_attempts": 3 }
+}

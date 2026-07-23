@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.db
+.venv/
+venv/
+node_modules/
+dist/
+.pytest_cache/
+*.tfstate
+*.tfstate.backup
+.terraform/
+plan.bin

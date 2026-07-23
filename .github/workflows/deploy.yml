@@ -1,0 +1,92 @@
+name: Deploy Idea Board
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:       { description: "aws or gcp", required: true, default: "aws" }
+      environment: { description: "staging or production", required: true, default: "staging" }
+      goal:        { description: "e.g. cost-sensitive staging", required: false }
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    # GHCR (free) needs the job's GITHUB_TOKEN to be allowed to write packages.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Default to GitHub's free container registry (GHCR). Override by setting
+      # a REGISTRY secret (e.g. Docker Hub) if you ever want a different one.
+      - name: Resolve container registry
+        run: |
+          if [ -n "${{ secrets.REGISTRY }}" ]; then
+            REG="${{ secrets.REGISTRY }}"
+          else
+            OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+            REG="ghcr.io/$OWNER"
+          fi
+          echo "REG=$REG" >> "$GITHUB_ENV"
+          echo "Using registry: $REG"
+
+      # Log in to GHCR with the automatic GITHUB_TOKEN — no extra secret needed.
+      - name: Log in to GHCR
+        if: startsWith(env.REG, 'ghcr.io')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: AI summary (advisory)
+        run: python ai/summarize.py || true
+
+      - name: AI propose config
+        run: echo "config=$(python -m ai.propose_config '${{ inputs.goal }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push images
+        run: |
+          docker build -t "$REG/backend:$SHA"  app/backend
+          docker build -t "$REG/frontend:$SHA" app/frontend
+          docker push "$REG/backend:$SHA" && docker push "$REG/frontend:$SHA"
+
+      # --- Part C: generate IaC from platform.json, then run the GAUNTLET ---
+      - name: Generate & validate IaC
+        run: |
+          python -m ai.iac_generator generate --provider ${{ inputs.cloud }} --env ${{ inputs.environment }}
+          cd infra/generated/${{ inputs.cloud }}
+          terraform init -input=false
+          terraform fmt -check
+          terraform validate
+          terraform plan -out plan.bin
+          terraform show -json plan.bin > plan.json
+          conftest test plan.json --policy ../../policy         # gate 4: policy
+          python ../../../ai/iac_generator.py assert-nondestructive plan.json  # gate 6
+
+      - name: Terraform apply (only if every gate passed)
+        run: |
+          cd infra/generated/${{ inputs.cloud }}
+          terraform apply -auto-approve plan.bin
+          terraform output -raw kubeconfig   > /tmp/kubeconfig
+          terraform output -raw database_url > /tmp/dburl
+          terraform output -raw app_endpoint > /tmp/endpoint
+
+      - name: Canary deploy
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          python - <<'PY'
+          from ai.canary import CanaryController
+          import os
+          CanaryController().start(f"{os.environ['REG']}/backend:{os.environ['SHA']}",
+                                   f"{os.environ['REG']}/frontend:{os.environ['SHA']}",
+                                   open("/tmp/dburl").read().strip())
+          PY
+
+      - name: Agent — analyse canary & decide (promote / repair / rollback)
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          python -m ai.agent canary --endpoint "$(cat /tmp/endpoint)"

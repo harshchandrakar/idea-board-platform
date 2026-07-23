@@ -1,0 +1,5 @@
+# The core agent uses only the Python standard library (urllib, json, subprocess).
+# The following are OPTIONAL and only needed to ship OpenTelemetry traces
+# (e.g. to LangSmith). The agent runs fine without them.
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0

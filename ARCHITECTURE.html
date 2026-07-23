@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Idea Board — Interactive Architecture Explainer</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2b3444;
+    --text:#e6edf3; --muted:#8b95a5; --accent:#58a6ff; --accent2:#7ee787;
+    --warn:#f0b849; --danger:#ff7b72; --pill:#21324a;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5}
+  header{padding:22px 26px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#12182200,#0d1117)}
+  header h1{margin:0;font-size:22px}
+  header p{margin:6px 0 0;color:var(--muted);font-size:14px;max-width:820px}
+  .tabs{display:flex;gap:6px;padding:0 26px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .tab{padding:12px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;font-size:14px;font-weight:600}
+  .tab.active{color:var(--text);border-bottom-color:var(--accent)}
+  .view{display:none;padding:22px 26px;max-width:1400px}
+  .view.active{display:block}
+
+  /* Explorer layout */
+  .explorer{display:grid;grid-template-columns:290px 1fr;gap:20px;align-items:start}
+  @media(max-width:900px){.explorer{grid-template-columns:1fr}}
+  .tree{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:8px;position:sticky;top:56px;max-height:calc(100vh - 80px);overflow:auto}
+  .search{width:100%;padding:9px 11px;margin-bottom:8px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
+  .folder{margin:2px 0}
+  .folder-h{display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:7px;cursor:pointer;font-weight:700;font-size:13.5px}
+  .folder-h:hover{background:var(--panel2)}
+  .folder-h .chev{transition:transform .15s;color:var(--muted);font-size:11px}
+  .folder.collapsed .chev{transform:rotate(-90deg)}
+  .folder.collapsed .files{display:none}
+  .folder .badge{margin-left:auto;font-size:11px;color:var(--muted);background:var(--panel2);padding:1px 7px;border-radius:20px;font-weight:600}
+  .files{padding-left:8px}
+  .file{padding:6px 9px;margin:2px 0;border-radius:7px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;gap:7px;align-items:center}
+  .file:hover{background:var(--panel2);color:var(--text)}
+  .file.active{background:var(--pill);color:var(--text)}
+  .file .ico{font-size:12px;opacity:.85}
+
+  /* Detail panel */
+  .detail{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;min-height:400px}
+  .crumb{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin-bottom:6px}
+  .detail h2{margin:0 0 4px;font-size:19px}
+  .tagrow{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 16px}
+  .tag{font-size:11.5px;padding:3px 10px;border-radius:20px;background:var(--pill);color:var(--accent);font-weight:600}
+  .tag.part{background:#2a2140;color:#d2a8ff}
+  .role{color:var(--text);font-size:14.5px;background:var(--panel2);border-left:3px solid var(--accent);padding:12px 14px;border-radius:0 8px 8px 0;margin-bottom:18px}
+  .fn{border:1px solid var(--border);border-radius:9px;margin:10px 0;overflow:hidden}
+  .fn-h{display:flex;align-items:baseline;gap:10px;padding:11px 14px;background:var(--panel2);cursor:pointer}
+  .fn-h code{font-family:var(--mono);font-size:13px;color:var(--accent2)}
+  .fn-h .kind{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-left:auto}
+  .fn-b{padding:0 14px;max-height:0;overflow:hidden;transition:max-height .2s,padding .2s}
+  .fn.open .fn-b{max-height:400px;padding:12px 14px}
+  .fn-b p{margin:0 0 8px;font-size:13.5px}
+  .fn-b .uc{font-size:12.5px;color:var(--muted)}
+  .fn-b .uc b{color:var(--warn)}
+  .hint{color:var(--muted);font-size:13px;margin-top:14px}
+  .empty-state{color:var(--muted);text-align:center;padding:80px 20px}
+  .empty-state .big{font-size:40px;margin-bottom:12px}
+
+  /* Flow diagrams */
+  .flow-wrap{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:24px;margin-bottom:22px}
+  .flow-wrap h3{margin:0 0 4px;font-size:16px}
+  .flow-wrap .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .pipe{display:flex;flex-wrap:wrap;gap:0;align-items:stretch}
+  .step{flex:1;min-width:130px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:12px;position:relative;margin:6px}
+  .step .n{font-size:11px;color:var(--accent);font-weight:700}
+  .step .t{font-size:13.5px;font-weight:600;margin:3px 0}
+  .step .d{font-size:12px;color:var(--muted)}
+  .loop{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:8px}
+  @media(max-width:760px){.loop{grid-template-columns:1fr 1fr}}
+  .node{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center}
+  .node .ph{font-size:12px;color:var(--accent);font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+  .node .ttl{font-size:15px;font-weight:700;margin:6px 0}
+  .node .dd{font-size:12.5px;color:var(--muted)}
+  .arrowline{text-align:center;color:var(--muted);margin:6px 0;font-size:20px}
+  .socket{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+  @media(max-width:760px){.socket{grid-template-columns:1fr}}
+  .card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .card h4{margin:0 0 6px;font-size:15px}
+  .card .plug{font-size:12px;color:var(--accent2);font-family:var(--mono)}
+  .card p{font-size:13px;color:var(--muted);margin:8px 0 0}
+  table.mini{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  table.mini th,table.mini td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  table.mini th{color:var(--muted);font-weight:600}
+  code.inline{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px;color:var(--accent2)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+  /* Learn-from-zero track */
+  #learn{max-width:920px}
+  .learn-intro{color:var(--muted);font-size:14px;margin-bottom:18px}
+  .progressbar{height:6px;background:var(--panel2);border-radius:20px;margin:14px 0 4px;overflow:hidden}
+  #progressFill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+  .progresslabel{font-size:12px;color:var(--muted)}
+  .chapter{background:var(--panel);border:1px solid var(--border);border-radius:12px;margin:14px 0;overflow:hidden}
+  .ch-h{display:flex;align-items:center;gap:14px;padding:16px 18px;cursor:pointer}
+  .ch-h:hover{background:var(--panel2)}
+  .ch-num{flex:0 0 40px;height:40px;border-radius:10px;background:var(--pill);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
+  .ch-titles{flex:1}
+  .ch-eyebrow{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .ch-title{font-size:17px;font-weight:700;margin-top:2px}
+  .ch-chev{color:var(--muted);font-size:14px;transition:transform .2s}
+  .chapter.open .ch-chev{transform:rotate(90deg)}
+  .ch-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+  .chapter.open .ch-body{max-height:1600px}
+  .ch-inner{padding:0 18px 20px 72px}
+  @media(max-width:600px){.ch-inner{padding:0 16px 18px}}
+  .block{margin:14px 0}
+  .block .lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+  .block.what .lbl{color:var(--accent)}
+  .block.why .lbl{color:var(--warn)}
+  .block.analogy .lbl{color:#d2a8ff}
+  .block.here .lbl{color:var(--accent2)}
+  .block p{margin:0;font-size:14.5px;line-height:1.6}
+  .block.analogy{background:var(--panel2);border-left:3px solid #d2a8ff;padding:12px 14px;border-radius:0 8px 8px 0}
+  .block.here{background:var(--panel2);border-left:3px solid var(--accent2);padding:12px 14px;border-radius:0 8px 8px 0}
+  .prevnext{font-size:13px;color:var(--muted);margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>💡 Idea Board — Interactive Architecture Explainer</h1>
+  <p>The app (React + FastAPI + Postgres) is trivial on purpose. The real product is the <b>platform</b> that builds, deploys, verifies and self-heals it. Explore it three ways: <b>folder → file → function</b>. Click any file on the left, then expand a function to see what it does and when it runs.</p>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-view="learn">🎓 Start from Zero</div>
+  <div class="tab" data-view="explorer">📂 Code Explorer</div>
+  <div class="tab" data-view="flows">🔄 The Flows</div>
+  <div class="tab" data-view="concepts">🔌 Core Concepts</div>
+</div>
+
+<!-- ============ LEARN FROM ZERO ============ -->
+<div class="view active" id="learn">
+  <div class="learn-intro">
+    <p>New to all of this? Read top to bottom. Each step builds on the one before, in the order the platform actually uses them. No prior knowledge assumed — we start from "what problem are we even solving?"</p>
+    <div class="progressbar"><div id="progressFill"></div></div>
+    <div class="progresslabel" id="progressLabel">Step 0 of 10</div>
+  </div>
+  <div id="chapters"></div>
+</div>
+
+<!-- ============ EXPLORER ============ -->
+<div class="view" id="explorer">
+  <div class="explorer">
+    <div class="tree">
+      <input class="search" id="search" placeholder="🔎 Filter files & functions…">
+      <div id="treeRoot"></div>
+    </div>
+    <div class="detail" id="detail">
+      <div class="empty-state">
+        <div class="big">👈</div>
+        <div>Pick a file to see its role and every function inside it.</div>
+        <div class="hint">Start with <code class="inline">ai/agent.py</code> — the brain — or <code class="inline">platform.json</code> — the single source of truth.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FLOWS ============ -->
+<div class="view" id="flows">
+  <div class="flow-wrap">
+    <h3>🤖 The agent loop — <code class="inline">observe → diagnose → act → verify</code></h3>
+    <p class="sub">Lives in <code class="inline">ai/agent.py :: run_loop()</code>. Repeats up to <code class="inline">retry_budget</code> (3) times, then escalates. This same loop powers canary decisions, self-healing, and the background watcher.</p>
+    <div class="loop">
+      <div class="node"><div class="ph">1 · Observe</div><div class="ttl">Read signals</div><div class="dd"><code class="inline">signals.snapshot()</code> — health, error-rate trend, bad pod reason. Read-only.</div></div>
+      <div class="node"><div class="ph">2 · Diagnose</div><div class="ttl">Pick ONE action</div><div class="dd"><code class="inline">decide()</code> asks Gemini for an allowlisted action; <code class="inline">rule_based()</code> if the model is down.</div></div>
+      <div class="node"><div class="ph">3 · Act</div><div class="ttl">Pull a safe lever</div><div class="dd"><code class="inline">clamp()</code> bounds the numbers, <code class="inline">needs_human()</code> gates it, then <code class="inline">actuator.execute()</code>.</div></div>
+      <div class="node"><div class="ph">4 · Verify</div><div class="ttl">Did it work?</div><div class="dd"><code class="inline">verify()</code> re-checks health. Healthy → done. Not → loop again. Out of budget → escalate.</div></div>
+    </div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--accent2)"></span>Every decision is logged by <code class="inline">telemetry.record_decision()</code></span>
+      <span><span class="dot" style="background:var(--warn)"></span>Autonomy L0/L1 stops at step 3 and hands to a human</span>
+    </div>
+  </div>
+
+  <div class="flow-wrap">
+    <h3>🏭 The CI/CD pipeline — <code class="inline">.github/workflows/deploy.yml</code></h3>
+    <p class="sub">Triggered manually (Actions → Deploy Idea Board), you pick <code class="inline">cloud</code> + <code class="inline">environment</code>. Reads top to bottom:</p>
+    <div class="pipe">
+      <div class="step"><div class="n">STEP 1</div><div class="t">AI summary</div><div class="d">Plain-English "what's shipping" — <code class="inline">summarize.py</code></div></div>
+      <div class="step"><div class="n">STEP 2</div><div class="t">Propose config</div><div class="d">Goal → sizing numbers — <code class="inline">propose_config.py</code></div></div>
+      <div class="step"><div class="n">STEP 3</div><div class="t">Build & push</div><div class="d">Docker images → GHCR (free)</div></div>
+      <div class="step"><div class="n">STEP 4</div><div class="t">Generate + gauntlet</div><div class="d">IaC from <code class="inline">platform.json</code>, 6 gates</div></div>
+      <div class="step"><div class="n">STEP 5</div><div class="t">Terraform apply</div><div class="d">Only if all gates pass; read 3 outputs</div></div>
+      <div class="step"><div class="n">STEP 6</div><div class="t">Canary deploy</div><div class="d">New version to a small slice — <code class="inline">canary.py</code></div></div>
+      <div class="step"><div class="n">STEP 7</div><div class="t">Agent decides</div><div class="d">Promote / repair / rollback — <code class="inline">agent.py</code></div></div>
+    </div>
+  </div>
+
+  <div class="flow-wrap">
+    <h3>🛡️ The IaC safety gauntlet — why LLM-generated infra is safe</h3>
+    <p class="sub">Generated Terraform is <b>guilty until proven valid</b>. It must clear all six gates, in order, before <code class="inline">terraform apply</code>. The tools are the judge — the model can't talk its way past them.</p>
+    <table class="mini">
+      <tr><th>Gate</th><th>Tool</th><th>Catches</th><th>Code</th></tr>
+      <tr><td>1 · Format</td><td><code class="inline">terraform fmt</code></td><td>Garbage / malformed output</td><td>CI</td></tr>
+      <tr><td>2 · Validate</td><td><code class="inline">terraform validate</code></td><td>Made-up args, unknown resources</td><td>CI</td></tr>
+      <tr><td>3 · Plan</td><td><code class="inline">terraform plan</code></td><td>Anything that wouldn't build</td><td>CI</td></tr>
+      <tr><td>4 · Policy</td><td><code class="inline">conftest</code> / OPA</td><td>Public DB, bad region, too many nodes, missing tags</td><td><code class="inline">infra/policy/policy.rego</code></td></tr>
+      <tr><td>5 · Contract</td><td>3-line check</td><td>Missing required outputs</td><td><code class="inline">check_contract()</code></td></tr>
+      <tr><td>6 · Destroy-guard</td><td>read the plan</td><td>Would destroy/replace your database</td><td><code class="inline">assert_nondestructive()</code></td></tr>
+    </table>
+    <p class="hint">Before gate 1, two pure-Python pre-checks already run at generation: <code class="inline">check_allowlist()</code> (only approved resource types) and <code class="inline">check_contract()</code>. Fail → RCA → regenerate, up to <code class="inline">max_fix_attempts</code>, then escalate.</p>
+  </div>
+</div>
+
+<!-- ============ CONCEPTS ============ -->
+<div class="view" id="concepts">
+  <div class="flow-wrap">
+    <h3>🔌 "Plug into a socket, not a wall"</h3>
+    <p class="sub">One idea runs through everything: program to a <b>contract</b>, so each moving part is swappable without touching the rest.</p>
+    <div class="socket">
+      <div class="card"><h4>Socket #1 · Cloud</h4><div class="plug">platform.json → Terraform</div><p>Every cloud must deliver 3 outputs: <code class="inline">kubeconfig</code>, <code class="inline">database_url</code>, <code class="inline">app_endpoint</code>. Add a cloud = one JSON block. The LLM generates that cloud's Terraform on demand.</p></div>
+      <div class="card"><h4>Socket #2 · Orchestrator</h4><div class="plug">Actuator interface</div><p>The agent only ever calls <code class="inline">actuator.execute(action, params)</code>. Today it drives Kubernetes/Helm. Swap in a new <code class="inline">Actuator</code> subclass and nothing upstream changes.</p></div>
+      <div class="card"><h4>Socket #3 · AI</h4><div class="plug">LLMClient + Actuator</div><p>A <b>reasoning</b> socket (<code class="inline">ask()</code> → text) and an <b>acting</b> socket. Swap Gemini for any model by writing one class. Thinking and doing are each swappable.</p></div>
+    </div>
+  </div>
+
+  <div class="flow-wrap">
+    <h3>🎚️ Autonomy levels — dial the trust per environment</h3>
+    <table class="mini">
+      <tr><th>Level</th><th>Name</th><th>Behaviour</th><th>Typical use</th></tr>
+      <tr><td><b>L0</b></td><td>Watch</td><td>Diagnoses & explains only. No action.</td><td>First run / audit</td></tr>
+      <tr><td><b>L1</b></td><td>Suggest</td><td>Proposes an action, waits for a human.</td><td>Production</td></tr>
+      <tr><td><b>L2</b></td><td>Act</td><td>Executes reversible, allowlisted actions itself.</td><td>Staging</td></tr>
+    </table>
+    <p class="hint">Enforced in <code class="inline">guardrails.py :: needs_human()</code>. Irreversible actions are human-gated at <b>every</b> level — they're not even on the allowlist.</p>
+  </div>
+
+  <div class="flow-wrap">
+    <h3>🔒 The allowlist — the cage the AI cannot open</h3>
+    <p class="sub"><code class="inline">guardrails.py</code>. The model can only ever return a <i>name</i> from this list — every one is reversible. Dangerous verbs simply aren't expressible.</p>
+    <table class="mini">
+      <tr><th>✅ Allowed (reversible)</th><th>⛔ Forbidden (never selectable)</th></tr>
+      <tr><td><code class="inline">hold, escalate, run_network_analysis, redeploy, restart_workload, scale_replicas, scale_nodes, promote_canary, abort_canary, rollback</code></td><td><code class="inline">delete_database, destroy_infra, delete_stateful</code></td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+const DATA = [
+  {
+    folder:"📁 root", badge:"config + entrypoints",
+    files:[
+      {name:"platform.json", ico:"⚙️", role:"THE single source of truth. Everything the platform needs — the app, environments, sizing intents, per-cloud templates, safety policy, and agent tuning — lives in this one file. Change infrastructure here and only here; the LLM regenerates Terraform from it.",
+        tags:["config","Part C"],
+        fns:[
+          {k:"key",n:"app / database",p:"Declares the services (backend:8000, frontend:80) and the DB engine (postgres 16). Feeds the Helm values and the generated Terraform.",uc:"Referenced when building images and wiring the app."},
+          {k:"key",n:"environments",p:"Maps each env to an intent + autonomy, e.g. staging = cost-sensitive/L2, production = high-availability/L1.",uc:"The agent reads autonomy here; the generator reads intent."},
+          {k:"key",n:"sizing",p:"Friendly words → concrete numbers (node_count, node_size, db_size, replicas), cloud-neutral.",uc:"'cost-sensitive' → 2 small nodes; the generator maps these onto each cloud's size_map."},
+          {k:"key",n:"providers.{aws,gcp}",p:"Per-cloud template: region, cluster module+version, DB resource, size_map, and allowed_resources.",uc:"Adding a cloud = pasting one more block. This is the only per-cloud knowledge in the repo."},
+          {k:"key",n:"policy",p:"The rules generated code is checked against: allowed regions, max_node_count, db_must_be_private, required tags, protect_from_destroy.",uc:"Enforced by conftest (gate 4) and assert_nondestructive (gate 6)."},
+          {k:"key",n:"agent",p:"Agent tuning: canary_percent, error_rate_threshold, replica_bounds, retry_budget, watch_interval.",uc:"Loaded into Guardrails to bound what the agent may do."}
+        ]},
+      {name:"Makefile", ico:"🔧", role:"THE single human interface. Short verbs wrap the real commands so you never memorise them.",
+        tags:["entrypoint"],
+        fns:[
+          {k:"target",n:"up / down",p:"Start or tear down the full local stack via docker compose.",uc:"`make up` → app on localhost:3000."},
+          {k:"target",n:"test",p:"Install dev deps and run the pytest suite.",uc:"`make test` before committing."},
+          {k:"target",n:"demo",p:"Run the agent against a simulated cluster — no cloud, no key.",uc:"`make demo` to watch self-healing."},
+          {k:"target",n:"gen",p:"Generate IaC for a cloud from platform.json (needs GEMINI_API_KEY).",uc:"`make gen CLOUD=aws`."},
+          {k:"target",n:"deploy",p:"Points you at the GitHub workflow with the right inputs.",uc:"`make deploy CLOUD=gcp ENV=production`."}
+        ]},
+      {name:"docker-compose.yml", ico:"🐳", role:"Part B — runs the whole stack (db + backend + frontend) on your laptop with one command. Same DATABASE_URL variable the cloud uses.",
+        tags:["Part B","local"],
+        fns:[
+          {k:"service",n:"db",p:"Postgres 16 with a healthcheck (pg_isready) so backend waits for it.",uc:"Local database, zero setup."},
+          {k:"service",n:"backend",p:"Builds app/backend, injects DATABASE_URL, exposes 8000, waits for db healthy.",uc:"The API."},
+          {k:"service",n:"frontend",p:"Builds app/frontend with VITE_API_URL baked in, serves on 3000.",uc:"The UI you open in a browser."}
+        ]},
+      {name:"run-local.sh", ico:"▶️", role:"One-command bootstrapper: checks/installs Docker, builds & starts everything, waits for health, runs a smoke test against the API.",
+        tags:["entrypoint","local"],
+        fns:[
+          {k:"flag",n:"--check",p:"Only report prerequisites (Docker, Compose, python).",uc:"See if your machine is ready."},
+          {k:"flag",n:"--tests / --demo",p:"Also run pytest, or run the agent self-heal demo.",uc:"Prove logic without a cloud."},
+          {k:"flag",n:"--down / --rebuild",p:"Stop the stack, or force a rebuild.",uc:"Reset between runs."}
+        ]}
+    ]
+  },
+  {
+    folder:"📁 app/backend", badge:"FastAPI + Postgres",
+    files:[
+      {name:"main.py", ico:"🐍", role:"The API itself — now full CRUD over ideas, plus a health probe. CORS is open so the browser frontend can call it.",
+        tags:["Part A","backend"],
+        fns:[
+          {k:"endpoint",n:"GET /api/health",p:"Returns {status:ok}. Small but critical — probes and the agent poke it to decide 'is the app up?'",uc:"Kubernetes readinessProbe + SignalCollector._health()."},
+          {k:"endpoint",n:"GET /api/ideas",p:"List all ideas, newest first.",uc:"Frontend load()."},
+          {k:"endpoint",n:"POST /api/ideas",p:"Create an idea (201). Rejects empty content with 422.",uc:"Frontend Add form."},
+          {k:"endpoint",n:"GET /api/ideas/{id}",p:"Fetch one idea; 404 if missing.",uc:"Confirm a change persisted."},
+          {k:"endpoint",n:"PUT /api/ideas/{id}",p:"Update content; 404 if missing, 422 if empty.",uc:"Frontend inline Edit → Save."},
+          {k:"endpoint",n:"DELETE /api/ideas/{id}",p:"Delete an idea; 404 if missing.",uc:"Frontend Delete button."},
+          {k:"fn",n:"lifespan()",p:"On startup calls init_db() so the table exists before serving traffic.",uc:"No manual migrations."}
+        ]},
+      {name:"db.py", ico:"🗄️", role:"The database layer. The connection string is injected via DATABASE_URL, so the SAME code talks to a laptop SQLite file or a cloud Postgres — nothing about any cloud is baked in.",
+        tags:["backend"],
+        fns:[
+          {k:"class",n:"Idea",p:"The one table: id, content, created_at. to_dict() serialises a row for JSON.",uc:"Every endpoint returns to_dict()."},
+          {k:"fn",n:"init_db()",p:"Creates the table if missing. Idempotent, safe on every boot.",uc:"Called by lifespan()."}
+        ]},
+      {name:"Dockerfile", ico:"📦", role:"Packages the backend into a container (python:3.12-slim, uvicorn on 8000).",tags:["Part B"],fns:[
+          {k:"note",n:"single stage",p:"Install requirements, copy code, run uvicorn.",uc:"Identical box on laptop or cloud."}]}
+    ]
+  },
+  {
+    folder:"📁 app/frontend", badge:"React (Vite)",
+    files:[
+      {name:"src/App.jsx", ico:"⚛️", role:"The whole UI: a create form plus a list where each idea can be edited inline or deleted. API address comes from a build-time variable.",
+        tags:["Part A","frontend"],
+        fns:[
+          {k:"fn",n:"load()",p:"GET /api/ideas into state; shows an error if the backend is unreachable.",uc:"On mount and after every change."},
+          {k:"fn",n:"submit()",p:"POST a new idea, then reload.",uc:"Create."},
+          {k:"fn",n:"startEdit / saveEdit / cancelEdit",p:"Inline editing: open a text box, PUT the change, or cancel.",uc:"Update."},
+          {k:"fn",n:"remove()",p:"DELETE an idea, then reload.",uc:"Delete."}
+        ]},
+      {name:"src/index.css", ico:"🎨", role:"Small stylesheet — the list rows, edit row, and Edit/Delete button styles.",tags:["frontend"],fns:[
+          {k:"note",n:"item / actions / ghost / danger",p:"Layout for each idea row and its action buttons.",uc:"Visual polish for CRUD controls."}]},
+      {name:"Dockerfile", ico:"📦", role:"Two-stage build: compile React with Node, then serve the static files with tiny nginx.",tags:["Part B"],fns:[
+          {k:"note",n:"build → serve",p:"Final image carries only built assets + nginx, so it's small.",uc:"Fast, portable frontend container."}]}
+    ]
+  },
+  {
+    folder:"📁 ai/  ⭐", badge:"the deployment agent",
+    files:[
+      {name:"llm_client.py", ico:"🧠", role:"Socket #3 (reasoning). Everything talks to LLMClient, never to Gemini directly, so the model is swappable and nothing else notices.",
+        tags:["Part E","AI socket"],
+        fns:[
+          {k:"class",n:"LLMClient (ABC)",p:"The contract: one method, ask(prompt) → text. That's the whole interface.",uc:"Program against this, not against any vendor."},
+          {k:"class",n:"GeminiClient",p:"The real plug. Calls Gemini via plain urllib at temperature 0. Raises early if GEMINI_API_KEY is missing.",uc:"Production reasoning."},
+          {k:"class",n:"ScriptedLLMClient",p:"Test/demo plug: returns canned answers or raises to simulate an outage.",uc:"Unit tests + offline demo."},
+          {k:"fn",n:"ask_json()",p:"Ask for JSON but NEVER raise — on any error (429, bad JSON, timeout) return the fallback dict. This is what keeps the agent alive when the model is down.",uc:"Used by decide(), propose_config()."}
+        ]},
+      {name:"actions.py", ico:"🦾", role:"Socket #2 (acting). Executes exactly ONE allowlisted action. The command runner is injectable so tests assert exact commands with no real cluster.",
+        tags:["Part E","AI socket"],
+        fns:[
+          {k:"class",n:"Actuator (ABC)",p:"The contract: execute(action, params). Swap the subclass to target something other than Kubernetes.",uc:"Orchestrator-agnostic."},
+          {k:"class",n:"K8sActuator.execute()",p:"Maps each allowlisted action to a reversible kubectl/helm command (rollout restart, scale, helm rollback, canary scripts, netdiag). Refuses unknown actions.",uc:"The real doer in a live cluster."},
+          {k:"class",n:"SimulatedCluster",p:"A tiny in-memory cluster modelling the faults the agent heals and how each action resolves them. is_healthy() / apply().",uc:"Powers the demo & tests with zero deps."},
+          {k:"class",n:"SimulatedActuator.execute()",p:"Applies actions to a SimulatedCluster and records history.",uc:"Lets run_loop() run offline."}
+        ]},
+      {name:"guardrails.py", ico:"🛡️", role:"The cage the agent cannot open. The allowlist holds ONLY reversible actions; irreversible ones are deliberately absent so the model can't even express them.",
+        tags:["Part E","safety"],
+        fns:[
+          {k:"const",n:"ALLOWLIST / FORBIDDEN",p:"The 10 safe verbs the model may return; the 3 dangerous ones kept only so reviewers see the intent.",uc:"The whole safety story in one place."},
+          {k:"class",n:"Guardrails",p:"Per-environment limits: autonomy, allowed set, namespace, replica_bounds, max_node_increase, retry_budget, require_approval.",uc:"Built from platform.json's agent block."},
+          {k:"fn",n:"is_allowed()",p:"Action must be on the global allowlist AND enabled for this env; forbidden actions rejected always.",uc:"decide() double-checks the model's choice."},
+          {k:"fn",n:"clamp()",p:"Forces the model's numbers into safe bounds (replicas within bounds, node delta capped) before execution.",uc:"Even a wild number can't over-scale."},
+          {k:"fn",n:"needs_human()",p:"True when the agent must hand off: action is escalate, autonomy is L0/L1, or the action needs approval.",uc:"The autonomy dial, enforced."}
+        ]},
+      {name:"signals.py", ico:"📡", role:"Read-only signal collection. Everything here observes; nothing mutates. The agent calls snapshot() each pass.",
+        tags:["Part E","observe"],
+        fns:[
+          {k:"class",n:"SignalCollector.snapshot()",p:"Returns health_ok, error_rate_rising, pod_reason. The kubectl runner is injectable for tests.",uc:"Step 1 (Observe) of the loop, live."},
+          {k:"fn",n:"_health()",p:"GET /api/health with a 5s timeout → bool.",uc:"Is the app actually up?"},
+          {k:"fn",n:"_bad_pod_reason()",p:"Parses kubectl pod JSON for ImagePullBackOff / CrashLoopBackOff / Pending.",uc:"Tells the agent which self-heal to pick."},
+          {k:"class",n:"SimulatedSignals.snapshot()",p:"Reads a SimulatedCluster instead of a real one.",uc:"Offline demo & tests."}
+        ]},
+      {name:"agent.py  ⭐", ico:"🧭", role:"THE brain: observe → diagnose → act → verify. Reasons with the model but only emits data; acts only through the allowlist; clamps numbers, gates by autonomy, retries within budget, then escalates.",
+        tags:["Part E","the loop"],
+        fns:[
+          {k:"fn",n:"rule_based()",p:"Boring, reliable fallback that maps a signal to an action with no model at all (ImagePull→redeploy, Pending→scale_nodes, CrashLoop→rollback, errors→analysis→restart).",uc:"Self-healing survives a Gemini outage."},
+          {k:"fn",n:"decide()",p:"Asks the model to pick ONE allowlisted action; falls back to rule_based() on any problem or an off-allowlist answer.",uc:"Step 2 (Diagnose)."},
+          {k:"fn",n:"run_loop()",p:"The heart: loops observe→clamp(decide)→gate→execute→verify up to retry_budget, recording every decision, then escalates.",uc:"Called by canary, watch, and the demo."},
+          {k:"fn",n:"_demo()",p:"Runs 3 scenarios against a SimulatedCluster: crash-loop rollback, error-rate analysis→restart, and L1 escalation with no action.",uc:"`python -m ai.agent demo`."}
+        ]},
+      {name:"canary.py", ico:"🐤", role:"Release a new version to a small slice next to the stable one, then promote or abort. Runner injectable for testing.",
+        tags:["Part E/F"],
+        fns:[
+          {k:"class",n:"CanaryController.start()",p:"helm upgrade --install a *-canary release with canary.enabled/weight set.",uc:"Pipeline step 6."},
+          {k:"fn",n:"promote()",p:"Shift all traffic to the canary (scripts/promote_canary.sh).",uc:"Agent decided the canary is healthy."},
+          {k:"fn",n:"abort()",p:"helm rollback the canary release.",uc:"Agent decided it's worse than stable."}
+        ]},
+      {name:"iac_generator.py", ico:"🏗️", role:"Generate Terraform from platform.json, and run the deterministic checks that make LLM infra safe (the pure-Python gates). fmt/validate/plan/conftest run alongside in CI.",
+        tags:["Part C","IaC"],
+        fns:[
+          {k:"fn",n:"build_brief()",p:"Builds a tight, grounded prompt: only these resource types, this pinned module, these size maps, exactly these outputs, invent NOTHING.",uc:"Stops hallucination at the source."},
+          {k:"fn",n:"generate()",p:"Asks the model to assemble Terraform and writes it to infra/generated/<provider>/. Nothing is applied here.",uc:"`make gen CLOUD=aws`."},
+          {k:"fn",n:"check_allowlist()",p:"Regex the generated .tf for resource/module types not on allowed_resources → violations.",uc:"Pre-gate before CI even runs."},
+          {k:"fn",n:"check_contract()",p:"Confirms the 3 required outputs are declared.",uc:"Gate 5."},
+          {k:"fn",n:"assert_nondestructive()",p:"Reads terraform plan JSON; returns any protected resource the plan would destroy/replace. Empty = safe.",uc:"Gate 6 — protects your database."}
+        ]},
+      {name:"telemetry.py", ico:"📊", role:"Part G. Every agent decision becomes a structured log line (always) and an OpenTelemetry span (if OTel is installed). Point OTel at LangSmith for the rich trace view.",
+        tags:["Part G","observability"],
+        fns:[
+          {k:"fn",n:"record_decision()",p:"Captures trigger, source (model/fallback), action, diagnosis, params, guardrail (allowed/clamped/blocked), confidence, verified.",uc:"Called at every branch of run_loop()."},
+          {k:"fn",n:"_trigger()",p:"Turns the signals into a short human trigger string ('pod CrashLoopBackOff', 'error rate rising').",uc:"The 'why' on each record."}
+        ]},
+      {name:"summarize.py", ico:"📝", role:"Advisory only: a plain-English summary of what's shipping, from recent git commits. Takes no action.",
+        tags:["Part F","advisory"],
+        fns:[{k:"fn",n:"main()",p:"Feeds `git log` to Gemini Flash-Lite for 3 reviewer bullets; prints a graceful message if rate-limited.",uc:"Pipeline step 1."}]},
+      {name:"propose_config.py", ico:"🎯", role:"Turn a plain-English goal ('cost-sensitive staging') into concrete sizing numbers, with safe defaults if the model is unavailable.",
+        tags:["Part E","advisory"],
+        fns:[{k:"fn",n:"main(goal)",p:"Prompts for node_count/node_size/db_size/replica_count as JSON; falls back to safe small defaults.",uc:"Pipeline step 2; feeds Terraform + Helm."}]},
+      {name:"prompts/", ico:"💬", role:"The text sent to the model, kept OUT of the code as .txt templates with {{placeholders}}. Edit wording without touching Python, review prompt changes as clean diffs, reuse across call sites — same idea as platform.json.",
+        tags:["Part E","prompts"],
+        fns:[
+          {k:"tpl",n:"iac_generate.txt",p:"Grounds Terraform generation: allowlist, pinned module, size map, required outputs, 'invent NOTHING'.",uc:"Loaded by iac_generator.build_brief()."},
+          {k:"tpl",n:"agent_decide.txt",p:"Asks the operator-agent to pick ONE allowlisted action from the signals.",uc:"Loaded by agent.decide()."},
+          {k:"tpl",n:"summarize / propose_config",p:"Reviewer summary; goal→sizing numbers.",uc:"Loaded by summarize.py / propose_config.py."},
+          {k:"fn",n:"__init__.render(name, **vals)",p:"Loads a .txt and replaces {{key}} tokens (not str.format — prompts contain literal JSON braces).",uc:"The one loader every call site uses."}
+        ]}
+    ]
+  },
+  {
+    folder:"📁 deploy/helm", badge:"portable K8s run-instructions",
+    files:[
+      {name:"values.yaml", ico:"🎛️", role:"The fill-in-the-blanks for the templates: images, replicas, databaseUrl, ingress host, canary toggle, watcher schedule/autonomy, OTel endpoint. Same templates, any cloud/env.",
+        tags:["Part D"],
+        fns:[
+          {k:"key",n:"image.{backend,frontend,agent}",p:"Filled by the pipeline with freshly built images.",uc:"What actually runs."},
+          {k:"key",n:"canary / watcher / observability",p:"Toggle canary, schedule the healing watcher, point traces at LangSmith.",uc:"Wire Parts E–G without editing templates."}
+        ]},
+      {name:"templates/backend.yaml", ico:"☸️", role:"Deployment + Service for the API. Injects DATABASE_URL, sets CPU/memory requests+limits, and a readinessProbe on /api/health so traffic only hits ready pods. No cloud names anywhere.",
+        tags:["Part D"],
+        fns:[{k:"note",n:"Deployment + Service",p:"When autoscaling is on, the HPA owns replica count (static replicas only when it's off). Resource requests are what the HPA measures against.",uc:"Runs the backend identically on any Kubernetes."}]},
+      {name:"templates/hpa.yaml", ico:"📈", role:"HorizontalPodAutoscaler — scales app copies (pods) with TRAFFIC. Kubernetes watches average CPU and adds pods past the target, removes them when it falls. Bounded by min/max.",
+        tags:["Part D","scaling"],
+        fns:[
+          {k:"note",n:"backend + frontend HPAs",p:"autoscaling/v2, target 70% CPU, min 2 / max 10 (from values.yaml). Toggle with autoscaling.enabled.",uc:"'Scale as per traffic' — automatic and continuous."},
+          {k:"note",n:"two layers of scaling",p:"HPA adds POD copies. When there's no room for more pods, the agent's scale_nodes / the cloud node-autoscaler add MACHINES.",uc:"Pods scale in seconds; nodes back them when needed."}
+        ]},
+      {name:"templates/frontend.yaml", ico:"☸️", role:"Deployment + Service for the React/nginx frontend.",tags:["Part D"],fns:[{k:"note",n:"Deployment + Service",p:"Serves the built UI.",uc:"Public-facing pods."}]},
+      {name:"templates/ingress.yaml", ico:"🚪", role:"The public front door: routes /api → backend, / → frontend. Toggle with ingress.enabled.",tags:["Part D"],fns:[{k:"note",n:"Ingress rules",p:"Path-based routing to the two services.",uc:"One URL for the whole app."}]},
+      {name:"templates/watcher-cronjob.yaml", ico:"⏰", role:"The healing watcher: runs the agent loop on a schedule (every minute) as a CronJob next to the app, carrying the same guardrails as the pipeline.",
+        tags:["Part F","self-heal"],
+        fns:[{k:"note",n:"CronJob → ai.agent watch",p:"Wakes the agent to observe; only calls Gemini when a signal crosses a line.",uc:"Heals faults that appear AFTER a deploy ends."}]},
+      {name:"templates/otel-collector.yaml", ico:"📈", role:"Part G collector config: fans out agent traces → LangSmith, system metrics → Prometheus. Swap a backend with one line.",
+        tags:["Part G"],
+        fns:[{k:"note",n:"receivers/exporters/pipelines",p:"OTLP in, two pipelines out.",uc:"Vendor-neutral observability."}]},
+      {name:"templates/_helpers.tpl", ico:"🧩", role:"Shared label helper (idea.labels) reused by every manifest — includes the required env + managed-by tags.",tags:["Part D"],fns:[{k:"note",n:"idea.labels",p:"Consistent labels everywhere.",uc:"Satisfies the tag policy."}]}
+    ]
+  },
+  {
+    folder:"📁 infra", badge:"policy + generated IaC",
+    files:[
+      {name:"policy/policy.rego", ico:"⚖️", role:"Gate 4 of the gauntlet — the OPA/conftest rules the generated plan is checked against in CI. Deterministic; the LLM can't soften it.",
+        tags:["Part C","safety"],
+        fns:[
+          {k:"rule",n:"deny public database",p:"Blocks aws_db_instance with publicly_accessible = true.",uc:"Your DB is never on the open internet."},
+          {k:"rule",n:"deny too many nodes",p:"Blocks desired_size > 6.",uc:"Caps runaway cost."},
+          {k:"rule",n:"require tags",p:"Blocks resources missing the env tag.",uc:"Everything is attributable."}
+        ]},
+      {name:"generated/README.md", ico:"🚫", role:"Marks infra/generated/ as machine-written — DO NOT hand-edit. Terraform here is generated from platform.json and committed so every change is a reviewable git diff.",
+        tags:["Part C"],
+        fns:[{k:"note",n:"why committed",p:"Reviewable diffs; regenerated only when the spec changes.",uc:"You review real Terraform, not a black box."}]}
+    ]
+  },
+  {
+    folder:"📁 scripts", badge:"cloud-specific shell (behind the actuator)",
+    files:[
+      {name:"netdiag.sh", ico:"🔍", role:"Read-only network diagnostics (DNS, service endpoints, DB reachability). Must NOT change anything — it's the 'run_network_analysis' action's hands.",
+        tags:["Part E"],fns:[{k:"note",n:"read-only probe",p:"Reveals the cause; the agent then picks a bounded fix.",uc:"Called by K8sActuator on run_network_analysis."}]},
+      {name:"promote_canary.sh", ico:"⬆️", role:"Shift 100% traffic to the canary and make it the new stable.",tags:["Part F"],fns:[{k:"note",n:"promote",p:"The muscle behind promote_canary.",uc:"Agent decided the canary is healthy."}]},
+      {name:"scale_nodes.sh", ico:"➕", role:"Increase the node pool by DELTA. Cloud-specific, kept behind the actuator so the agent stays cloud-agnostic.",tags:["Part E"],fns:[{k:"note",n:"scale +delta",p:"Capped by max_node_increase before it ever runs.",uc:"Fixes 'Pending' unschedulable pods."}]}
+    ]
+  },
+  {
+    folder:"📁 .github/workflows", badge:"the assembly line",
+    files:[
+      {name:"deploy.yml", ico:"🚀", role:"Part F — the CI/CD pipeline. Manual trigger with cloud + environment inputs. Now defaults to GHCR (free) for images via the built-in GITHUB_TOKEN.",
+        tags:["Part F","CI/CD"],
+        fns:[
+          {k:"step",n:"Resolve registry + GHCR login",p:"Defaults REG to ghcr.io/<owner>; logs in with GITHUB_TOKEN. Override with a REGISTRY secret for Docker Hub.",uc:"No registry credentials to manage."},
+          {k:"step",n:"AI summary / propose config",p:"Advisory summary + goal→sizing.",uc:"Steps 1–2."},
+          {k:"step",n:"Build & push images",p:"Docker build backend+frontend, push to the registry.",uc:"Step 3."},
+          {k:"step",n:"Generate & validate IaC",p:"Generate Terraform, then fmt→validate→plan→conftest→assert-nondestructive.",uc:"Step 4 — the gauntlet."},
+          {k:"step",n:"Terraform apply",p:"Applies only the plan that cleared every gate; reads the 3 contract outputs.",uc:"Step 5."},
+          {k:"step",n:"Canary + Agent decide",p:"Start the canary, then let the agent promote/repair/rollback.",uc:"Steps 6–7."}
+        ]}
+    ]
+  },
+  {
+    folder:"📁 tests", badge:"55 passing",
+    files:[
+      {name:"test_backend.py", ico:"✅", role:"Live-server tests for the API: health, create+list, get-one, update, delete, and the 404/422 edge cases (full CRUD).",tags:["tests"],fns:[{k:"note",n:"TestClient",p:"Spins the app against a throwaway SQLite DB.",uc:"Proves every endpoint."}]},
+      {name:"test_agent.py", ico:"✅", role:"The self-heal loop: allowlist enforcement, autonomy gating, deterministic fallback, escalation on budget exhaustion.",tags:["tests"],fns:[{k:"note",n:"loop scenarios",p:"Runs run_loop against SimulatedCluster.",uc:"Proves the brain behaves."}]},
+      {name:"test_guardrails.py", ico:"✅", role:"clamp bounds, is_allowed, needs_human, forbidden-action rejection.",tags:["tests"],fns:[{k:"note",n:"cage tests",p:"The safety properties, asserted.",uc:"Proves the AI can't escape."}]},
+      {name:"test_iac_generator.py", ico:"✅", role:"Allowlist, contract, and destroy-guard checks against representative Terraform/plan JSON.",tags:["tests"],fns:[{k:"note",n:"gauntlet units",p:"The pure-Python gates.",uc:"Proves LLM infra is checked."}]},
+      {name:"test_actuator / test_signals / test_llm_client", ico:"✅", role:"Command construction, signal parsing, and JSON-fallback behaviour.",tags:["tests"],fns:[{k:"note",n:"socket tests",p:"Each socket in isolation.",uc:"Proves the plumbing."}]}
+    ]
+  }
+];
+
+// ---- render tree ----
+const treeRoot=document.getElementById('treeRoot');
+const detail=document.getElementById('detail');
+let flat=[];
+DATA.forEach((fld,fi)=>{
+  const f=document.createElement('div'); f.className='folder'; if(fi>3)f.classList.add('collapsed');
+  const h=document.createElement('div'); h.className='folder-h';
+  h.innerHTML=`<span class="chev">▼</span><span>${fld.folder}</span><span class="badge">${fld.badge}</span>`;
+  h.onclick=()=>f.classList.toggle('collapsed');
+  const fc=document.createElement('div'); fc.className='files';
+  fld.files.forEach((file,xi)=>{
+    const el=document.createElement('div'); el.className='file';
+    el.innerHTML=`<span class="ico">${file.ico}</span><span class="fname">${file.name}</span>`;
+    el.onclick=()=>{document.querySelectorAll('.file').forEach(n=>n.classList.remove('active'));el.classList.add('active');show(file,fld);};
+    file._el=el; file._folder=fld.folder; flat.push(file);
+    fc.appendChild(el);
+  });
+  f.appendChild(h); f.appendChild(fc); treeRoot.appendChild(f);
+});
+
+function show(file,fld){
+  let html=`<div class="crumb">${fld.folder.replace(/^📁 /,'')} / ${file.name}</div>`;
+  html+=`<h2>${file.ico} ${file.name}</h2>`;
+  html+=`<div class="tagrow">${(file.tags||[]).map(t=>`<span class="tag ${t.startsWith('Part')?'part':''}">${t}</span>`).join('')}</div>`;
+  html+=`<div class="role">${file.role}</div>`;
+  file.fns.forEach((fn,i)=>{
+    html+=`<div class="fn" data-i="${i}">
+      <div class="fn-h"><code>${fn.n}</code><span class="kind">${fn.k}</span></div>
+      <div class="fn-b"><p>${fn.p}</p><div class="uc"><b>When it runs:</b> ${fn.uc}</div></div>
+    </div>`;
+  });
+  html+=`<div class="hint">💡 Click a function to expand. Tags map to the BLUEPRINT.md parts.</div>`;
+  detail.innerHTML=html;
+  detail.querySelectorAll('.fn-h').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('open'));
+}
+
+// ---- search ----
+document.getElementById('search').addEventListener('input',e=>{
+  const q=e.target.value.toLowerCase().trim();
+  flat.forEach(file=>{
+    const hay=(file.name+' '+file.role+' '+file.fns.map(f=>f.n+f.p+f.uc).join(' ')).toLowerCase();
+    file._el.style.display=(!q||hay.includes(q))?'flex':'none';
+  });
+  document.querySelectorAll('.folder').forEach(f=>{
+    const anyVisible=[...f.querySelectorAll('.file')].some(x=>x.style.display!=='none');
+    f.style.display=anyVisible?'block':'none';
+    if(q&&anyVisible)f.classList.remove('collapsed');
+  });
+});
+
+// ---- learn-from-zero chapters ----
+const CHAPTERS=[
+  {n:"0",eyebrow:"The point of it all",title:"What problem are we solving?",
+   what:"You built a small web app (the Idea Board). Now it has to run on the internet, 24/7, survive crashes, handle updates without downtime, and not get you locked into one cloud company. Doing all that by hand is slow and error-prone.",
+   why:"The app is trivial on purpose. The real deliverable is the <b>platform</b> — the reusable machine that ships the app safely. Everything below is a piece of that machine. We add each piece only because the previous one left a gap.",
+   analogy:"Think of the app as a product, and everything else as the factory + delivery trucks + quality inspectors that get the product to customers reliably.",
+   here:"Two folders are the app (<code class='inline'>app/backend</code>, <code class='inline'>app/frontend</code>). <i>Every other folder</i> exists to ship and babysit those two."},
+
+  {n:"1",eyebrow:"Packaging · Docker",title:"Containers — putting the app in a sealed box",
+   what:"A <b>container</b> is a sealed box that holds your program plus everything it needs to run (the exact Python version, libraries, etc.). Docker is the tool that builds and runs these boxes.",
+   why:"Without it you get 'works on my machine, breaks on the server' — because the server has different versions of things. A container carries its whole environment with it, so it runs identically on your laptop, on Amazon, or on Google. This is the first step toward 'runs anywhere'.",
+   analogy:"A shipping container: the same steel box fits on a truck, a train, or a ship without anyone repacking what's inside. Your app travels the same way.",
+   here:"<code class='inline'>app/backend/Dockerfile</code> and <code class='inline'>app/frontend/Dockerfile</code> are the recipes for each box."},
+
+  {n:"2",eyebrow:"Local dev · Docker Compose",title:"Running several boxes together on your laptop",
+   what:"Real apps are several containers at once — here: database + backend + frontend. Docker <b>Compose</b> starts them all together with one command and wires them up.",
+   why:"You want the whole app running locally in ~30 seconds with zero cloud involved, so you can develop and test. Starting three containers by hand and connecting them every time would be painful.",
+   analogy:"A power strip for your app: one switch turns on all three appliances, already plugged into each other.",
+   here:"<code class='inline'>docker-compose.yml</code> → run <code class='inline'>docker compose up</code> and open localhost:3000. Notice the backend gets its database address from a <code class='inline'>DATABASE_URL</code> variable — the same variable name the cloud will later use."},
+
+  {n:"3",eyebrow:"The gap",title:"Why your laptop isn't enough — enter servers",
+   what:"Compose is great locally, but real users need the app on always-on machines on the internet, with more than one copy so it survives a crash and handles traffic.",
+   why:"Now you need something that runs your containers across several server machines, restarts them if they die, replaces them during updates, and spreads load. Doing that by hand across many servers is exactly the job of the next tool.",
+   analogy:"Going from cooking one meal in your kitchen (laptop) to running a restaurant kitchen with many stations that must never all go dark at once.",
+   here:"This is the motivation for Kubernetes (next). Nothing in the repo yet — it's the problem Kubernetes solves."},
+
+  {n:"4",eyebrow:"Running containers at scale · Kubernetes",title:"Kubernetes — the thing that keeps containers running",
+   what:"<b>Kubernetes</b> (often 'K8s') is a system that runs your containers across a cluster of machines. You tell it the desired state ('I want 2 copies of the backend running'), and it constantly works to make reality match — restarting crashed containers, replacing them on updates, spreading them across machines.",
+   why:"It automates all the babysitting from step 3. Crucially, <b>every big cloud offers Kubernetes and they all speak the same language</b> (same commands, same config files). So instructions written once work on Amazon's, Google's, or Microsoft's Kubernetes — that's your anti-lock-in layer.",
+   analogy:"A restaurant manager: you say 'always keep 2 chefs at the grill.' If one quits mid-shift, the manager instantly pulls in a replacement — you don't micromanage it.",
+   here:"We don't hand-write raw Kubernetes files though — that's verbose and repetitive. That's why we use Helm (next)."},
+
+  {n:"5",eyebrow:"You asked about this one · Helm",title:"Helm — fill-in-the-blanks instructions for Kubernetes",
+   what:"Kubernetes is configured with YAML files that describe what to run. These files are long and you'd need slightly different versions for staging vs production vs each cloud. <b>Helm</b> is a templating tool: you write the Kubernetes instructions <i>once</i> with blanks in them, and keep the blanks' values in a separate file. Helm fills the blanks to produce the final config. A bundle of these templates is called a 'chart'.",
+   why:"Without Helm you'd copy-paste near-identical Kubernetes YAML for every environment and cloud, and they'd drift out of sync. With Helm, one set of templates + different value files covers every case. It also gives you one-command <b>install</b>, <b>upgrade</b>, and — vitally — <b>rollback</b> to the previous version if a deploy goes bad.",
+   analogy:"A form letter. You write the letter once with [NAME] and [DATE] blanks, then mail-merge different values. Same letter body, many personalized outputs — instead of retyping it each time.",
+   here:"<code class='inline'>deploy/helm/</code>. The templates (<code class='inline'>templates/backend.yaml</code> etc.) are the form letter; <code class='inline'>values.yaml</code> holds the blanks (which image, how many replicas, the database URL). None of these files mention AWS or GCP — that's what makes them portable. The agent's 'rollback' action is literally <code class='inline'>helm rollback</code>."},
+
+  {n:"6",eyebrow:"Creating the cloud · Terraform / IaC",title:"Terraform — asking the cloud for machines using code",
+   what:"Before Kubernetes can run anything, <i>something</i> has to create the actual cloud resources: the cluster of machines, a managed database, the networking. <b>Terraform</b> lets you describe all that infrastructure as code (this is called 'Infrastructure as Code', IaC), and it makes the cloud match your description.",
+   why:"Clicking around a cloud's web console to create servers is slow, unrepeatable, and easy to get wrong. Code is repeatable, reviewable, and can be torn down and rebuilt identically. And <code class='inline'>terraform destroy</code> removes the whole bill when you don't need it.",
+   analogy:"A blueprint + a construction crew that reads it. You write the blueprint (Terraform); it builds exactly that, the same way every time.",
+   here:"Generated Terraform lands in <code class='inline'>infra/generated/</code>. But we don't hand-write it per cloud — the next step explains the clever bit."},
+
+  {n:"7",eyebrow:"The clever bit · one spec + an LLM",title:"platform.json — one file, and AI writes the cloud code",
+   what:"Instead of hand-writing separate Terraform for AWS and GCP, we keep <b>one file, <code class='inline'>platform.json</code></b>, describing what we want plus a small template per cloud. When you deploy, the AI (Gemini) reads it and <i>generates</i> that cloud's Terraform on demand.",
+   why:"Hand-writing per-cloud infra means the same idea lives in many files that drift apart. One spec means: change a value once, add a cloud with one block, and nothing gets out of sync. But an AI can hallucinate — so generated code is <b>'guilty until proven valid'</b>: it must pass a fixed chain of checks (format, validate, plan, policy rules, required-outputs, and a 'don't destroy my database' guard) before it's ever applied. The tools are the judge, not the AI's confidence.",
+   analogy:"You give a very fast junior architect a strict template and an approved-materials list. They fill in the drawing quickly, but a building inspector checks every line before construction — and can veto anything.",
+   here:"<code class='inline'>platform.json</code> (the spec), <code class='inline'>ai/iac_generator.py</code> (does the generating + checks), <code class='inline'>infra/policy/policy.rego</code> (the inspector's rulebook)."},
+
+  {n:"8",eyebrow:"Automation · CI/CD",title:"The pipeline — the assembly line that ships it all",
+   what:"<b>CI/CD</b> is an automatic assembly line that runs when you deploy. Ours: write a plain-English summary → pick sizing → build the containers → generate + validate the cloud infra → create the cloud → release the new version to a <b>small slice of users first (a 'canary')</b> → let the AI agent decide to keep it or undo it.",
+   why:"Doing these steps manually every release is slow and easy to fumble. And a bad release should hurt a few users for a few seconds (canary), not everyone for an hour. The assembly line makes safe releases the default, not a thing you have to remember.",
+   analogy:"A car factory line: each station does one job in order, and there's a test-drive (canary) before the car ships — if it fails, it never reaches customers.",
+   here:"<code class='inline'>.github/workflows/deploy.yml</code> runs on GitHub for free. See the '🔄 The Flows' tab for the step-by-step."},
+
+  {n:"9",eyebrow:"The brain · the AI agent",title:"The deployment agent — AI that fixes things, safely",
+   what:"An <b>agent</b> is AI that doesn't just talk — it <i>acts</i>. This one runs a small loop: watch the system → work out what's wrong → do something about it → check it worked (in jargon: observe → diagnose → act → verify). It handles a bad canary, containers stuck not-starting, rising error rates.",
+   why:"These are the boring, painful 2am problems. Automating them means faster fixes and fewer human pages. The catch: an <i>acting</i> AI must be safe. So it can only pick from a fixed list of <b>reversible</b> actions (restart, scale, roll back…). Dangerous things (delete the database) aren't on the list, so it literally can't choose them. If the AI is unavailable, simple built-in rules still handle the common fixes.",
+   analogy:"A night-shift operator with a locked control panel: they can flip the safe switches to fix common faults, but the 'demolish the building' lever isn't on their panel — that always needs a manager.",
+   here:"<code class='inline'>ai/agent.py</code> (the loop), <code class='inline'>ai/guardrails.py</code> (the locked panel / allowlist), <code class='inline'>ai/actions.py</code> (the switches). You set how much it's trusted per environment with autonomy levels L0/L1/L2."},
+
+  {n:"10",eyebrow:"Seeing everything · Observability",title:"Observability — watching the system AND the AI's reasoning",
+   what:"<b>Observability</b> is being able to see what's happening: metrics (numbers over time), logs (what happened), and traces (the path of a request). Here there's a second, unusual lens too: <i>what did the agent decide, and why?</i>",
+   why:"You can't trust what you can't see. If the AI rolls something back at 2am, 'it just did' isn't acceptable — you need a screen showing which signals it saw, what it concluded, and what happened next. That's what makes the AI an auditable colleague instead of a black box.",
+   analogy:"A flight recorder (black box) for your deployments — plus a transcript of the pilot's reasoning, not just the dials.",
+   here:"<code class='inline'>ai/telemetry.py</code> writes a record for every decision. It emits vendor-neutral <b>OpenTelemetry</b>, fanned out to LangSmith (AI reasoning) and a metrics dashboard — swap either with one line (<code class='inline'>deploy/helm/templates/otel-collector.yaml</code>)."}
+];
+
+const chaptersEl=document.getElementById('chapters');
+const totalCh=CHAPTERS.length;
+let opened=new Set();
+CHAPTERS.forEach((c,i)=>{
+  const el=document.createElement('div'); el.className='chapter'; if(i===0)el.classList.add('open');
+  el.innerHTML=`
+    <div class="ch-h">
+      <div class="ch-num">${c.n}</div>
+      <div class="ch-titles"><div class="ch-eyebrow">${c.eyebrow}</div><div class="ch-title">${c.title}</div></div>
+      <div class="ch-chev">▶</div>
+    </div>
+    <div class="ch-body"><div class="ch-inner">
+      <div class="block what"><div class="lbl">What it is</div><p>${c.what}</p></div>
+      <div class="block why"><div class="lbl">Why it's needed</div><p>${c.why}</p></div>
+      <div class="block analogy"><div class="lbl">🎭 Analogy</div><p>${c.analogy}</p></div>
+      <div class="block here"><div class="lbl">📍 In this project</div><p>${c.here}</p></div>
+      ${i<totalCh-1?`<div class="prevnext">Next up → <b>${CHAPTERS[i+1].title}</b></div>`:`<div class="prevnext">🎉 That's the whole platform. Head to <b>📂 Code Explorer</b> to go file-by-file.</div>`}
+    </div></div>`;
+  const head=el.querySelector('.ch-h');
+  head.onclick=()=>{el.classList.toggle('open'); if(el.classList.contains('open'))opened.add(i); updateProgress();};
+  chaptersEl.appendChild(el);
+});
+if(CHAPTERS.length)opened.add(0);
+function updateProgress(){
+  const pct=Math.round(opened.size/totalCh*100);
+  document.getElementById('progressFill').style.width=pct+'%';
+  document.getElementById('progressLabel').textContent=`Read ${opened.size} of ${totalCh} steps`;
+}
+updateProgress();
+
+// ---- tabs ----
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById(t.dataset.view).classList.add('active');
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+Generate Terraform for this provider. You MUST:
+- use ONLY these resource/module types: {{allowed_resources}}
+- use module {{cluster_module}} pinned to {{cluster_version}}
+- use ONLY instance types from this map: {{size_map}}
+- declare exactly these outputs: {{required_outputs}}
+- invent NOTHING: no new resource types, no made-up arguments, no version guesses.
+Region: {{region}}. Sizing: {{sizing}}.

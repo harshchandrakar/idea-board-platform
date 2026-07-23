@@ -1,0 +1,3 @@
+Summarize these code changes for a non-technical reviewer in 3 short bullet points:
+
+{{changes}}

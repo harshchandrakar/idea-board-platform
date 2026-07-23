@@ -1,0 +1,41 @@
+replicaCount: 2            # baseline; ignored when autoscaling.enabled = true
+databaseUrl: ""            # injected from the Terraform contract output
+image:
+  backend: ""              # filled by the pipeline with the freshly built image
+  frontend: ""
+  agent: ""                # small image with ai/ + kubectl/helm (for the watcher)
+service:
+  backendPort: 8000
+  frontendPort: 80
+
+# Traffic-based autoscaling. Kubernetes adds/removes app copies (pods) to keep
+# average CPU near the target. Requires the resource requests below (HPA needs a
+# CPU request to measure "% used" against).
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Per-pod CPU/memory. `requests` = guaranteed reservation (and the HPA baseline);
+# `limits` = hard ceiling. Small on purpose for the Idea Board.
+resources:
+  backend:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  frontend:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+ingress:
+  enabled: true
+  host: ""                 # e.g. idea.example.com
+canary:
+  enabled: false
+  weight: 10
+watcher:
+  enabled: true
+  schedule: "*/1 * * * *"
+  autonomy: "L2"
+  endpoint: "http://frontend"
+observability:
+  otelEndpoint: "https://api.smith.langchain.com/otel"   # LangSmith OTLP (Part G)
