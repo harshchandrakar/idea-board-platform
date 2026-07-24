@@ -71,7 +71,7 @@ jobs:
       # --- rollout (readiness-gated; --atomic auto-reverts if pods never get ready) ---
       - name: Helm upgrade (frontend)
         run: |
-          helm upgrade --install idea deploy/helm \
+          helm upgrade --install idea deploy/helm -n idea --create-namespace \
             --set image.frontend="$REG/frontend:$SHA" \
             --set image.backend="$REG/backend:latest" \
             --wait --atomic --timeout 5m
