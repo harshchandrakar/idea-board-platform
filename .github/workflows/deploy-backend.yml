@@ -77,21 +77,26 @@ jobs:
             --wait --atomic --timeout 5m
 
       # --- AI canary: functional health check beyond readiness; rollback + RCA if bad ---
-      - name: AI canary check (agent verifies, rolls back with RCA)
+      - name: AI canary check (kubectl-based; AI RCA + rollback only if broken)
         run: |
-          kubectl -n idea port-forward svc/backend 8080:8000 >/tmp/pf.log 2>&1 &
-          PF=$!
-          # wait until the port-forward + app are actually reachable (up to ~60s),
-          # so a slow-to-establish tunnel isn't mistaken for an unhealthy app.
-          for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/health 2>/dev/null || true)
-            echo "health probe $i -> ${code:-none}"
-            [ "$code" = "200" ] && break
-            sleep 3
-          done
-          set +e
-          python -m ai.agent canary --endpoint http://localhost:8080 --namespace idea
-          RC=$?
-          set -e
-          kill $PF 2>/dev/null || true
-          exit $RC
+          echo "=== pods ===";      kubectl get pods -n idea -o wide || true
+          echo "=== endpoints ==="; kubectl get endpoints -n idea || true
+
+          HEALTHY=1
+          # 1) readiness/availability (reliable from the runner via kubeconfig)
+          kubectl rollout status deployment/backend -n idea --timeout=150s || HEALTHY=0
+          # 2) FUNCTIONAL check from INSIDE the cluster — hits the DB-backed endpoint,
+          #    catching problems (e.g. a bad DB connection) the readiness probe misses.
+          if [ "$HEALTHY" = "1" ]; then
+            kubectl -n idea exec deploy/backend -- \
+              python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/ideas', timeout=5)" \
+              || HEALTHY=0
+          fi
+
+          if [ "$HEALTHY" = "1" ]; then
+            echo "[canary] app healthy -> keep"; exit 0
+          fi
+          echo "[canary] app UNHEALTHY -> logs + AI root-cause + rollback"
+          kubectl logs deploy/backend -n idea --tail=80 || true
+          python -m ai.agent canary --endpoint http://localhost:8000 --namespace idea || true
+          exit 1

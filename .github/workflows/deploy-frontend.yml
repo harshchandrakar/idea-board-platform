@@ -77,19 +77,25 @@ jobs:
             --wait --atomic --timeout 5m
 
       # --- AI canary: functional health check; rollback + RCA if the app is broken ---
-      - name: AI canary check (agent verifies, rolls back with RCA)
+      - name: AI canary check (kubectl-based; AI RCA + rollback only if broken)
         run: |
-          kubectl -n idea port-forward svc/backend 8080:8000 >/tmp/pf.log 2>&1 &
-          PF=$!
-          for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/health 2>/dev/null || true)
-            echo "health probe $i -> ${code:-none}"
-            [ "$code" = "200" ] && break
-            sleep 3
-          done
-          set +e
-          python -m ai.agent canary --endpoint http://localhost:8080 --namespace idea
-          RC=$?
-          set -e
-          kill $PF 2>/dev/null || true
-          exit $RC
+          echo "=== pods ===";      kubectl get pods -n idea -o wide || true
+          echo "=== endpoints ==="; kubectl get endpoints -n idea || true
+
+          HEALTHY=1
+          kubectl rollout status deployment/frontend -n idea --timeout=150s || HEALTHY=0
+          kubectl rollout status deployment/backend  -n idea --timeout=150s || HEALTHY=0
+          # functional check from inside the cluster (DB-backed endpoint)
+          if [ "$HEALTHY" = "1" ]; then
+            kubectl -n idea exec deploy/backend -- \
+              python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/ideas', timeout=5)" \
+              || HEALTHY=0
+          fi
+
+          if [ "$HEALTHY" = "1" ]; then
+            echo "[canary] app healthy -> keep"; exit 0
+          fi
+          echo "[canary] app UNHEALTHY -> logs + AI root-cause + rollback"
+          kubectl logs deploy/frontend -n idea --tail=80 || true
+          python -m ai.agent canary --endpoint http://localhost:8000 --namespace idea || true
+          exit 1
