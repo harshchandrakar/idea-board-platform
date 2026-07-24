@@ -22,9 +22,14 @@ jobs:
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       PR_NUMBER: ${{ github.event.issue.number }}
-      SHA: ${{ github.sha }}
     steps:
+      # issue_comment events point at the DEFAULT branch — explicitly check out
+      # the PR's head so the preview builds the PR's code, not main's.
       - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+      - name: Use the PR head commit as the image tag
+        run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
