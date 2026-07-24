@@ -25,6 +25,9 @@ kind: Service
 metadata:
   name: frontend
 spec:
+  # ClusterIP for prod (fronted by the Ingress); previews set LoadBalancer to get
+  # their own public IP without touching the production release.
+  type: {{ .Values.service.frontendType | default "ClusterIP" }}
   selector: { app: frontend }
   ports:
     - port: {{ .Values.service.frontendPort }}

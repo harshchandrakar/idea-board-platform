@@ -1,0 +1,78 @@
+{{- if .Values.postgres.enabled }}
+# In-cluster Postgres: one pod backed by a persistent disk, shared by ALL
+# backend pods via a stable Service name ("postgres"). This is the cheapest way
+# to have a real shared database that survives pod restarts and works when the
+# backend scales to many replicas (they all talk to this one Service).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: idea-db
+  labels: {{- include "idea.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.postgres.password | quote }}
+  POSTGRES_DB: {{ .Values.postgres.db | quote }}
+---
+# A PersistentVolumeClaim asks the cloud for a disk. On GKE/EKS this provisions
+# a real block volume, so the data outlives the pod.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: idea-db-data
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.postgres.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  replicas: 1                      # a single DB instance (stateful; do not scale)
+  strategy: { type: Recreate }     # never run two pods on the same disk at once
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef: { name: idea-db }
+          # PGDATA subdir avoids the "lost+found" issue on some volumes.
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}, "-d", {{ .Values.postgres.db | quote }}] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources: {{- toYaml .Values.postgres.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: idea-db-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  selector: { app: postgres }
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}

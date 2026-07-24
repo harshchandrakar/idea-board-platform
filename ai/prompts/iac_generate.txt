@@ -1,10 +1,21 @@
-Generate Terraform for this provider. You MUST:
-- use ONLY these resource/module types: {{allowed_resources}}
-- use module {{cluster_module}} pinned to {{cluster_version}}
-- use ONLY instance types from this map: {{size_map}}
-- declare exactly these outputs: {{required_outputs}}
-- invent NOTHING: no new resource types, no made-up arguments, no version guesses.
-Region: {{region}}. Sizing: {{sizing}}.
+You are adapting a known-good Terraform template for provider "{{provider}}".
 
-Output RAW Terraform HCL only. Do NOT wrap it in markdown code fences (no ```), and
-add no prose before or after — the response must start with a Terraform block.
+Below is a REFERENCE template. Reproduce it EXACTLY, changing ONLY the values
+marked with a "# <ADAPT: ...>" comment to match the request. Keep every resource,
+module, block, and output identical. Do not add or remove resources. Use ONLY the
+resource/module types already present in the reference.
+
+Change these values:
+- region        -> {{region}}
+- zone          -> {{zone}}
+- node machine/instance type -> {{machine_type}}
+- node autoscaling min       -> {{min_nodes}}
+- node autoscaling max       -> {{max_nodes}}
+
+Remove the "# <ADAPT: ...>" marker comments from your output.
+
+REFERENCE TEMPLATE:
+{{reference}}
+
+Output RAW Terraform HCL only — no markdown code fences (no ```), no prose before
+or after. The response must start with the "terraform {" block.

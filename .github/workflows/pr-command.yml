@@ -1,0 +1,138 @@
+name: PR Ops (preview only)
+# AI-assisted PREVIEW command generation (case-study idea #1), locked to dev.
+# Comment on a PR:
+#   /ops give me a preview        -> deploys an isolated preview, replies with the link
+#   /ops what's the status?       -> shows this PR's preview status
+#   /ops tear it down             -> removes this PR's preview
+# Everything is scoped to namespace idea-pr-<PR#>. It can NEVER touch production.
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  ops:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/ops') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r ai/requirements.txt
+
+      - name: Interpret the comment (AI -> allowlisted preview command)
+        run: |
+          BODY=$(cat <<'EOF'
+          ${{ github.event.comment.body }}
+          EOF
+          )
+          TEXT="${BODY#/ops }"
+          python -m ai.command_router "$TEXT" > /tmp/reply.md
+          CMD=$(grep -m1 '^COMMAND=' /tmp/reply.md | cut -d= -f2)
+          echo "COMMAND=$CMD" >> "$GITHUB_ENV"
+          sed -i '/^COMMAND=/d' /tmp/reply.md   # keep the human-readable part only
+
+      - name: Post interpretation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: fs.readFileSync('/tmp/reply.md', 'utf8'),
+            });
+
+      # --- cluster access (skipped for 'help') ---
+      - name: GCP auth (keyless)
+        if: ${{ env.COMMAND != 'help' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: GKE kubeconfig
+        if: ${{ env.COMMAND != 'help' }}
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: idea-board
+          location: asia-south1-a
+      - name: Setup Helm
+        if: ${{ env.COMMAND != 'help' }}
+        uses: azure/setup-helm@v4
+
+      # --- deploy-preview: build images + isolated release + fetch the link ---
+      - name: Resolve registry
+        if: ${{ env.COMMAND == 'deploy-preview' }}
+        run: echo "REG=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+      - name: GHCR login
+        if: ${{ env.COMMAND == 'deploy-preview' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push preview images
+        if: ${{ env.COMMAND == 'deploy-preview' }}
+        run: |
+          docker build -t "$REG/backend:$SHA"  app/backend  && docker push "$REG/backend:$SHA"
+          docker build -t "$REG/frontend:$SHA" app/frontend && docker push "$REG/frontend:$SHA"
+      - name: Deploy isolated preview
+        if: ${{ env.COMMAND == 'deploy-preview' }}
+        run: |
+          NS="idea-pr-${PR_NUMBER}"
+          helm upgrade --install "$NS" deploy/helm -n "$NS" --create-namespace \
+            --set image.backend="$REG/backend:$SHA" \
+            --set image.frontend="$REG/frontend:$SHA" \
+            --set service.frontendType=LoadBalancer --wait --timeout 6m
+          IP=""
+          for i in $(seq 1 30); do
+            IP=$(kubectl get svc frontend -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            [ -n "$IP" ] && break; sleep 10
+          done
+          echo "PREVIEW_IP=${IP}" >> "$GITHUB_ENV"
+
+      - name: Preview status
+        if: ${{ env.COMMAND == 'preview-status' }}
+        run: |
+          NS="idea-pr-${PR_NUMBER}"
+          { echo '```'; kubectl get pods -n "$NS" 2>&1 || echo "no preview found for this PR"; echo '```'; } > /tmp/status.md
+
+      - name: Tear down preview
+        if: ${{ env.COMMAND == 'preview-down' }}
+        run: |
+          NS="idea-pr-${PR_NUMBER}"
+          helm uninstall "$NS" -n "$NS" || true
+          kubectl delete namespace "$NS" --ignore-not-found
+
+      - name: Post result
+        if: ${{ env.COMMAND != 'help' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cmd = process.env.COMMAND, pr = process.env.PR_NUMBER, fs = require('fs');
+            let body = '';
+            if (cmd === 'deploy-preview') {
+              const ip = process.env.PREVIEW_IP;
+              body = ip
+                ? `🚀 Preview \`idea-pr-${pr}\` is live: [http://${ip}](http://${ip})`
+                : `🚀 Preview \`idea-pr-${pr}\` deployed — the public IP is still provisioning. Re-run \`/ops status\` in ~1 min.`;
+            } else if (cmd === 'preview-status') {
+              body = fs.existsSync('/tmp/status.md') ? fs.readFileSync('/tmp/status.md', 'utf8') : 'no status available';
+            } else if (cmd === 'preview-down') {
+              body = `🧹 Preview \`idea-pr-${pr}\` has been torn down.`;
+            }
+            if (body) await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, body,
+            });

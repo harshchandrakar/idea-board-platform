@@ -11,21 +11,89 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 
 try:  # allow running both as a package (`python -m ai.agent`) and as a script
-    from .llm_client import LLMClient, ScriptedLLMClient, ask_json
+    from .llm_client import GeminiClient, LLMClient, ScriptedLLMClient, ask_json
     from .guardrails import Guardrails, clamp, is_allowed, needs_human, L1_RECOMMEND, L2_ACT
-    from .actions import Actuator, SimulatedActuator, SimulatedCluster
-    from .signals import SimulatedSignals
+    from .actions import Actuator, K8sActuator, SimulatedActuator, SimulatedCluster
+    from .signals import SignalCollector, SimulatedSignals
     from .prompts import render
     from . import telemetry
 except ImportError:  # pragma: no cover
-    from llm_client import LLMClient, ScriptedLLMClient, ask_json
+    from llm_client import GeminiClient, LLMClient, ScriptedLLMClient, ask_json
     from guardrails import Guardrails, clamp, is_allowed, needs_human, L1_RECOMMEND, L2_ACT
-    from actions import Actuator, SimulatedActuator, SimulatedCluster
-    from signals import SimulatedSignals
+    from actions import Actuator, K8sActuator, SimulatedActuator, SimulatedCluster
+    from signals import SignalCollector, SimulatedSignals
     from prompts import render
     import telemetry
+
+
+def load_spec(path: str = "platform.json") -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def build_guardrails(spec: dict, autonomy: str | None = None) -> Guardrails:
+    """Build the agent's guardrails from platform.json's `agent` block."""
+    a = spec.get("agent", {})
+    bounds = a.get("replica_bounds", [2, 8])
+    return Guardrails(
+        autonomy=autonomy or a.get("autonomy_default", L2_ACT),
+        replica_bounds=(bounds[0], bounds[1]),
+        max_node_increase=a.get("max_node_increase", 2),
+        retry_budget=a.get("retry_budget", 3),
+    )
+
+
+def maybe_client(spec: dict) -> LLMClient | None:
+    """A live Gemini client if a key is set, else None (rules-only)."""
+    if not os.environ.get("GEMINI_API_KEY"):
+        return None
+    try:  # pragma: no cover - needs a key
+        model = spec.get("generation", {}).get("model", "gemini-3.5-flash-lite")
+        return GeminiClient(model=model)
+    except Exception:
+        return None
+
+
+def rca_summary(client: LLMClient | None, signals: dict) -> str:
+    """A short, human-readable root-cause line for a rollback (case-study idea #3)."""
+    fallback = (f"health_ok={signals.get('health_ok')}, "
+                f"pod_reason={signals.get('pod_reason')}, "
+                f"error_rate_rising={signals.get('error_rate_rising')}")
+    if client is None:
+        return fallback
+    try:  # pragma: no cover - needs a key
+        prompt = ("In 2 sentences, give the most likely root cause of an unhealthy "
+                  "deployment from these signals, for a human on-call:\n"
+                  + json.dumps(signals, indent=2))
+        return client.ask(prompt).strip() or fallback
+    except Exception:
+        return fallback
+
+
+def canary_check(observe, actuator: Actuator, client: LLMClient | None = None,
+                 record=telemetry.record_decision) -> bool:
+    """Post-deploy gate: healthy -> keep; unhealthy -> roll back with an RCA.
+    Returns True if the canary was kept, False if it was rolled back.
+    """
+    signals = observe()
+    if signals.get("health_ok"):
+        record(signals, {"action": "hold", "diagnosis": "canary healthy", "source": "agent"},
+               "allowed", {"verified": True})
+        print("[agent] canary healthy -> keep")
+        return True
+    reason = rca_summary(client, signals)
+    print(f"[agent] canary UNHEALTHY -> rollback\n[agent] RCA: {reason}")
+    actuator.execute("rollback", {})
+    record(signals, {"action": "rollback", "diagnosis": reason, "source": "agent"},
+           "allowed", {"verified": False})
+    return False
 
 
 def rule_based(signals: dict) -> dict:
@@ -134,12 +202,30 @@ def _demo() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Idea Board deployment agent")
     parser.add_argument("mode", nargs="?", default="demo", choices=["demo", "canary", "watch"])
-    parser.add_argument("--endpoint", default="")
+    parser.add_argument("--endpoint", default="http://frontend")
+    parser.add_argument("--namespace", default="idea")
     args = parser.parse_args()
+
     if args.mode == "demo":
         _demo()
-    else:  # pragma: no cover - requires a real cluster + credentials
-        print(f"[agent] '{args.mode}' mode requires a live cluster; see README.")
+        return
+
+    # --- live modes: real signals + real actuator against the cluster ---
+    spec = load_spec()
+    collector = SignalCollector(args.endpoint, namespace=args.namespace)
+    actuator = K8sActuator(namespace=args.namespace)
+    client = maybe_client(spec)
+
+    if args.mode == "canary":  # pragma: no cover - requires a live cluster
+        # Verify the just-shipped release; roll back with an RCA if it's unhealthy.
+        kept = canary_check(collector.snapshot, actuator, client)
+        sys.exit(0 if kept else 1)
+
+    if args.mode == "watch":  # pragma: no cover - requires a live cluster
+        # One self-heal pass (the CronJob invokes this every minute).
+        g = build_guardrails(spec, os.environ.get("AGENT_AUTONOMY"))
+        ok = run_loop(collector.snapshot, actuator, g, client=client)
+        sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

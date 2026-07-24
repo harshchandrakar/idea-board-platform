@@ -1,0 +1,98 @@
+name: Infra — provision cluster
+# Separate INFRA workflow. It GENERATES the cluster's Terraform from platform.json
+# (adapting the provider's reference template in infra/templates/), runs the
+# validation gauntlet, then applies. Change cloud/sizing in platform.json — no
+# hand-editing .tf. Run rarely; the cluster is long-lived.
+#
+# One-time: a remote-state bucket (so the cluster is remembered between runs):
+#   GCP:  gsutil mb -l asia-south1 gs://<you>-idea-tfstate   -> secret GCP_TF_STATE_BUCKET
+#   AWS:  aws s3 mb s3://<you>-idea-tfstate --region ap-south-1 -> secret AWS_TF_STATE_BUCKET
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "gcp (GKE) or aws (EKS)"
+        type: choice
+        options: [gcp, aws]
+        default: gcp
+      environment:
+        description: "sizing profile"
+        type: choice
+        options: [staging, production]
+        default: staging
+      action:
+        description: "apply = create/update, destroy = tear down"
+        type: choice
+        options: [apply, destroy]
+        default: apply
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install python deps
+        run: pip install -r ai/requirements.txt
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - name: Install conftest
+        run: |
+          V=0.56.0
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${V}/conftest_${V}_Linux_x86_64.tar.gz" -o /tmp/c.tgz
+          tar xzf /tmp/c.tgz -C /tmp && sudo mv /tmp/conftest /usr/local/bin/
+
+      # --- cloud auth (only the matching one runs) ---
+      - name: GCP auth (keyless)
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: AWS auth
+        if: ${{ inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # --- generate the .tf from platform.json + the reference template ---
+      - name: Generate IaC from platform.json
+        run: python -m ai.iac_generator generate --provider ${{ inputs.cloud }} --env ${{ inputs.environment }}
+
+      # --- init (remote state) ---
+      - name: Terraform init
+        working-directory: infra/generated/${{ inputs.cloud }}
+        run: |
+          if [ "${{ inputs.cloud }}" = "gcp" ]; then
+            terraform init -backend-config="bucket=${{ secrets.GCP_TF_STATE_BUCKET }}" -backend-config="prefix=gke"
+          else
+            terraform init -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" -backend-config="key=eks/terraform.tfstate" -backend-config="region=${{ secrets.AWS_REGION }}"
+          fi
+
+      # --- gauntlet + apply, or destroy ---
+      - name: Terraform ${{ inputs.action }}
+        working-directory: infra/generated/${{ inputs.cloud }}
+        run: |
+          set -e
+          VAR=""
+          [ "${{ inputs.cloud }}" = "gcp" ] && VAR="-var=project_id=${GOOGLE_CLOUD_PROJECT}"
+          terraform fmt
+          if [ "${{ inputs.action }}" = "destroy" ]; then
+            terraform destroy -auto-approve $VAR
+            exit 0
+          fi
+          terraform validate
+          terraform plan -out plan.bin $VAR
+          terraform show -json plan.bin > plan.json
+          conftest test plan.json --policy ../../policy
+          python ../../../ai/iac_generator.py assert-nondestructive plan.json
+          terraform apply -auto-approve plan.bin
+          terraform output

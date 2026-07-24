@@ -1,5 +1,7 @@
 replicaCount: 2            # baseline; ignored when autoscaling.enabled = true
-databaseUrl: ""            # injected from the Terraform contract output
+# Points the backend at the in-cluster Postgres Service ("postgres") below.
+# Because it's a Service name, every backend pod resolves it to the same DB.
+databaseUrl: "postgresql+psycopg2://idea:idea@postgres:5432/ideas"
 image:
   backend: ""              # filled by the pipeline with the freshly built image
   frontend: ""
@@ -7,6 +9,20 @@ image:
 service:
   backendPort: 8000
   frontendPort: 80
+  frontendType: ClusterIP   # previews override to LoadBalancer for a public IP
+
+# In-cluster Postgres (cheapest shared DB). One pod + a persistent disk, shared
+# by all backend replicas. Set enabled: false if you switch to Cloud SQL/RDS.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  user: idea
+  password: idea
+  db: ideas
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
 
 # Traffic-based autoscaling. Kubernetes adds/removes app copies (pods) to keep
 # average CPU near the target. Requires the resource requests below (HPA needs a

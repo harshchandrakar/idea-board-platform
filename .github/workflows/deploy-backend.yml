@@ -1,0 +1,76 @@
+name: Deploy backend
+# Ships ONLY the backend: build its image -> push GHCR -> Helm-upgrade just the
+# backend on the existing cluster, gated on its /api/health readiness probe.
+# If the new version never becomes healthy, Helm fails and we auto-rollback.
+# (Infra must already exist — run the "Infra — provision cluster" workflow first.)
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "gcp (GKE) or aws (EKS)"
+        type: choice
+        options: [gcp, aws]
+        default: gcp
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve registry (GHCR)
+        run: echo "REG=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend image
+        run: |
+          docker build -t "$REG/backend:$SHA" -t "$REG/backend:latest" app/backend
+          docker push "$REG/backend:$SHA"; docker push "$REG/backend:latest"
+
+      - uses: azure/setup-helm@v4
+
+      # --- point kubectl/Helm at the cluster ---
+      - name: GCP auth (keyless)
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: GKE kubeconfig
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/get-gke-credentials@v2
+        with: { cluster_name: idea-board, location: asia-south1-a }
+
+      - name: AWS auth
+        if: ${{ inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: EKS kubeconfig
+        if: ${{ inputs.cloud == 'aws' }}
+        run: aws eks update-kubeconfig --name idea-board --region "${{ secrets.AWS_REGION }}"
+
+      # --- deploy just the backend; keep the frontend at its last image ---
+      - name: Helm upgrade (backend, readiness-gated)
+        run: |
+          helm upgrade --install idea deploy/helm \
+            --set image.backend="$REG/backend:$SHA" \
+            --set image.frontend="$REG/frontend:latest" \
+            --wait --timeout 5m
+
+      - name: Auto-rollback if the new backend never became healthy
+        if: failure()
+        run: helm rollback idea || true

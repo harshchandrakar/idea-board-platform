@@ -20,7 +20,8 @@ except ImportError:  # pragma: no cover
     from llm_client import GeminiClient, LLMClient
     from prompts import render
 
-REQUIRED_OUTPUTS = ("kubeconfig", "database_url", "app_endpoint")
+# The generated infra must expose this so the app workflows can find the cluster.
+REQUIRED_OUTPUTS = ("cluster_name",)
 
 
 def load_spec(path: str = "platform.json") -> dict:
@@ -33,18 +34,30 @@ def sizing_for(spec: dict, environment: str) -> dict:
     return spec["sizing"][intent]
 
 
+def reference_text(spec: dict, provider: str) -> str:
+    """The known-good reference Terraform the model adapts (grounding)."""
+    with open(spec["providers"][provider]["reference"], encoding="utf-8") as f:
+        return f.read()
+
+
 def build_brief(spec: dict, provider: str, environment: str) -> str:
+    """A reference-grounded brief: hand the model a working template and ask it to
+    change ONLY the marked sizing/region values from platform.json. This is what
+    makes generation reliable — it adapts a real example instead of inventing.
+    """
     p = spec["providers"][provider]
     sizing = sizing_for(spec, environment)
+    machine_type = p["size_map"]["node"][sizing["node_size"]]
     return render(
         "iac_generate",
-        allowed_resources=p["allowed_resources"],
-        cluster_module=p["cluster"]["module"],
-        cluster_version=p["cluster"]["version"],
-        size_map=p["size_map"],
-        required_outputs=list(REQUIRED_OUTPUTS),
+        provider=provider,
+        reference=reference_text(spec, provider),
         region=p["region"],
-        sizing=sizing,
+        zone=p.get("zone", f"{p['region']}-a"),
+        machine_type=machine_type,
+        min_nodes=sizing["min_nodes"],
+        max_nodes=sizing["max_nodes"],
+        allowed_resources=p["allowed_resources"],
     )
 
 
