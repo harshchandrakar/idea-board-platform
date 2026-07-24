@@ -49,6 +49,8 @@ def health():
 
 @app.get("/api/ideas")
 def list_ideas():
+    # !!! DELIBERATE FAILURE to test the canary — DO NOT MERGE !!!
+    raise RuntimeError("injected canary failure: /api/ideas is broken on purpose")
     with SessionLocal() as session:
         rows = session.query(Idea).order_by(Idea.created_at.desc(), Idea.id.desc()).all()
         return [row.to_dict() for row in rows]

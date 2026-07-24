@@ -1,0 +1,16 @@
+{{- if .Values.ingress.gkeBackendConfig }}
+# GKE-only: tell the L7 load balancer to health-check the backend on /api/health
+# instead of the default "/", which the backend doesn't serve (would 404 -> the
+# LB marks it unhealthy -> "connection reset" on /api). Harmless on non-GKE if
+# left disabled. The backend Service references this via a backend-config annotation.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: backend-hc
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  healthCheck:
+    requestPath: /api/health
+    port: {{ .Values.service.backendPort }}
+    type: HTTP
+{{- end }}
