@@ -93,6 +93,6 @@ jobs:
           terraform plan -out plan.bin $VAR
           terraform show -json plan.bin > plan.json
           conftest test plan.json --policy ../../policy
-          python ../../../ai/iac_generator.py assert-nondestructive plan.json
+          python ../../../ai/iac_generator.py assert-nondestructive plan.json --spec ../../../platform.json
           terraform apply -auto-approve plan.bin
           terraform output
