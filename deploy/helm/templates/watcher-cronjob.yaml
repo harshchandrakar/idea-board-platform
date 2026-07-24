@@ -1,4 +1,4 @@
-{{- if .Values.watcher.enabled }}
+{{- if and .Values.watcher.enabled .Values.image.agent }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
