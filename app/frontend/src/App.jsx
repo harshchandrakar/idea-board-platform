@@ -89,7 +89,10 @@ export default function App() {
 
   return (
     <main className="wrap">
-      <h1>💡 Idea Board</h1>
+      <div className="hero">
+        <h1>🚀 Idea Board</h1>
+        <p className="tagline">Fresh look — shipped via an AI-powered preview 🎉</p>
+      </div>
       <form onSubmit={submit} className="row">
         <input
           value={text}
@@ -135,6 +138,7 @@ export default function App() {
           <li className="empty">No ideas yet — add one above.</li>
         )}
       </ul>
+      <footer className="foot">Preview build · idea-board</footer>
     </main>
   );
 }
