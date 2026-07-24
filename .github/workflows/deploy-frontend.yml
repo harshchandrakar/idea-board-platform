@@ -1,7 +1,8 @@
 name: Deploy frontend
-# Ships ONLY the frontend: build its image -> push GHCR -> Helm-upgrade just the
-# frontend on the existing cluster. Rolls back automatically if the rollout fails.
-# (Infra must already exist — run the "Infra — provision cluster" workflow first.)
+# Ships ONLY the frontend: build image -> push GHCR -> Helm-upgrade just the
+# frontend (readiness-gated, --atomic auto-rollback) -> then the AI agent runs a
+# CANARY health check and rolls back with a plain-English RCA if the app is broken.
+# (Infra must exist first — run "Infra — provision cluster".)
 on:
   workflow_dispatch:
     inputs:
@@ -20,8 +21,13 @@ jobs:
       id-token: write
     env:
       SHA: ${{ github.sha }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install agent deps
+        run: pip install -r ai/requirements.txt
 
       - name: Resolve registry (GHCR)
         run: echo "REG=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
@@ -62,14 +68,23 @@ jobs:
         if: ${{ inputs.cloud == 'aws' }}
         run: aws eks update-kubeconfig --name idea-board --region "${{ secrets.AWS_REGION }}"
 
-      # --- deploy just the frontend; keep the backend at its last image ---
-      - name: Helm upgrade (frontend, readiness-gated)
+      # --- rollout (readiness-gated; --atomic auto-reverts if pods never get ready) ---
+      - name: Helm upgrade (frontend)
         run: |
           helm upgrade --install idea deploy/helm \
             --set image.frontend="$REG/frontend:$SHA" \
             --set image.backend="$REG/backend:latest" \
-            --wait --timeout 5m
+            --wait --atomic --timeout 5m
 
-      - name: Auto-rollback if the new frontend never became healthy
-        if: failure()
-        run: helm rollback idea || true
+      # --- AI canary: functional health check; rollback + RCA if the app is broken ---
+      - name: AI canary check (agent verifies, rolls back with RCA)
+        run: |
+          kubectl -n idea port-forward svc/backend 8080:8000 >/tmp/pf.log 2>&1 &
+          PF=$!
+          sleep 6
+          set +e
+          python -m ai.agent canary --endpoint http://localhost:8080 --namespace idea
+          RC=$?
+          set -e
+          kill $PF 2>/dev/null || true
+          exit $RC

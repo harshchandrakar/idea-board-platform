@@ -1,8 +1,8 @@
 name: Deploy backend
-# Ships ONLY the backend: build its image -> push GHCR -> Helm-upgrade just the
-# backend on the existing cluster, gated on its /api/health readiness probe.
-# If the new version never becomes healthy, Helm fails and we auto-rollback.
-# (Infra must already exist — run the "Infra — provision cluster" workflow first.)
+# Ships ONLY the backend: build image -> push GHCR -> Helm-upgrade just the backend
+# (readiness-gated, auto-rollback on failure via --atomic) -> then the AI agent
+# runs a CANARY health check and rolls back with a plain-English RCA if the app is
+# actually broken. (Infra must exist first — run "Infra — provision cluster".)
 on:
   workflow_dispatch:
     inputs:
@@ -21,8 +21,13 @@ jobs:
       id-token: write
     env:
       SHA: ${{ github.sha }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # for the RCA summary (optional)
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install agent deps
+        run: pip install -r ai/requirements.txt
 
       - name: Resolve registry (GHCR)
         run: echo "REG=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
@@ -63,14 +68,23 @@ jobs:
         if: ${{ inputs.cloud == 'aws' }}
         run: aws eks update-kubeconfig --name idea-board --region "${{ secrets.AWS_REGION }}"
 
-      # --- deploy just the backend; keep the frontend at its last image ---
-      - name: Helm upgrade (backend, readiness-gated)
+      # --- rollout (readiness-gated; --atomic auto-reverts if pods never get ready) ---
+      - name: Helm upgrade (backend)
         run: |
           helm upgrade --install idea deploy/helm \
             --set image.backend="$REG/backend:$SHA" \
             --set image.frontend="$REG/frontend:latest" \
-            --wait --timeout 5m
+            --wait --atomic --timeout 5m
 
-      - name: Auto-rollback if the new backend never became healthy
-        if: failure()
-        run: helm rollback idea || true
+      # --- AI canary: functional health check beyond readiness; rollback + RCA if bad ---
+      - name: AI canary check (agent verifies, rolls back with RCA)
+        run: |
+          kubectl -n idea port-forward svc/backend 8080:8000 >/tmp/pf.log 2>&1 &
+          PF=$!
+          sleep 6
+          set +e
+          python -m ai.agent canary --endpoint http://localhost:8080 --namespace idea
+          RC=$?
+          set -e
+          kill $PF 2>/dev/null || true
+          exit $RC
