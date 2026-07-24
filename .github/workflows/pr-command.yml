@@ -96,16 +96,23 @@ jobs:
         if: ${{ env.COMMAND == 'deploy-preview' }}
         run: |
           NS="idea-pr-${PR_NUMBER}"
+          # don't abort on helm failure — we still want to report pod state back
+          set +e
           helm upgrade --install "$NS" deploy/helm -n "$NS" --create-namespace \
             --set image.backend="$REG/backend:$SHA" \
             --set image.frontend="$REG/frontend:$SHA" \
-            --set service.frontendType=LoadBalancer --wait --timeout 6m
+            --set service.frontendType=LoadBalancer --wait --timeout 8m
+          echo "HELM_RC=$?" >> "$GITHUB_ENV"
+          set -e
+          echo "=== pods in $NS ==="; kubectl get pods -n "$NS" -o wide || true
           IP=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 42); do   # ~7 min for the LoadBalancer IP
             IP=$(kubectl get svc frontend -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
             [ -n "$IP" ] && break; sleep 10
           done
           echo "PREVIEW_IP=${IP}" >> "$GITHUB_ENV"
+          # capture pod state for the reply comment
+          kubectl get pods -n "$NS" 2>&1 > /tmp/pods.txt || true
 
       - name: Preview status
         if: ${{ env.COMMAND == 'preview-status' }}
@@ -121,7 +128,7 @@ jobs:
           kubectl delete namespace "$NS" --ignore-not-found
 
       - name: Post result
-        if: ${{ env.COMMAND != 'help' }}
+        if: ${{ always() && env.COMMAND != 'help' }}   # report even if the deploy failed
         uses: actions/github-script@v7
         with:
           script: |
@@ -129,9 +136,15 @@ jobs:
             let body = '';
             if (cmd === 'deploy-preview') {
               const ip = process.env.PREVIEW_IP;
-              body = ip
-                ? `🚀 Preview \`idea-pr-${pr}\` is live: [http://${ip}](http://${ip})`
-                : `🚀 Preview \`idea-pr-${pr}\` deployed — the public IP is still provisioning. Re-run \`/ops status\` in ~1 min.`;
+              const rc = process.env.HELM_RC || '1';
+              const pods = fs.existsSync('/tmp/pods.txt') ? fs.readFileSync('/tmp/pods.txt', 'utf8') : '';
+              if (rc === '0' && ip) {
+                body = `🚀 Preview \`idea-pr-${pr}\` is live: [http://${ip}](http://${ip})\n\n_First load can take ~1 min while the load balancer warms up._`;
+              } else if (rc === '0' && !ip) {
+                body = `🚀 Preview \`idea-pr-${pr}\` deployed — the public IP is still provisioning. Re-run \`/ops status\` in ~1 min.`;
+              } else {
+                body = `❌ Preview \`idea-pr-${pr}\` failed to become healthy. Pod state:\n\`\`\`\n${pods}\n\`\`\`\nSee the workflow logs for details, or \`/ops tear it down\` to clean up.`;
+              }
             } else if (cmd === 'preview-status') {
               body = fs.existsSync('/tmp/status.md') ? fs.readFileSync('/tmp/status.md', 'utf8') : 'no status available';
             } else if (cmd === 'preview-down') {
