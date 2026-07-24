@@ -77,6 +77,54 @@ def rca_summary(client: LLMClient | None, signals: dict) -> str:
         return fallback
 
 
+def git_change_summary(prev_sha: str, cur_sha: str, max_diff: int = 3000) -> str:
+    """What changed between the last-deployed commit and the failing one — so the
+    RCA can pin the cause to a specific code change, not just the symptoms.
+    """
+    import subprocess
+    if not prev_sha or not cur_sha or prev_sha == cur_sha:
+        return ""
+
+    def _run(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True).stdout
+        except Exception:
+            return ""
+
+    rng = f"{prev_sha}..{cur_sha}"
+    commits = _run(["git", "log", "--oneline", rng])
+    stat = _run(["git", "diff", "--stat", rng])
+    diff = _run(["git", "diff", rng])
+    if not (commits or stat or diff):
+        return ""
+    return (f"Commits in this deploy:\n{commits}\n"
+            f"Files changed:\n{stat}\n"
+            f"Diff (truncated):\n{diff[:max_diff]}")
+
+
+def rollout_rca(signals: dict, logs: str, code_diff: str = "",
+                client: LLMClient | None = None) -> str:
+    """A human-readable root-cause summary when a progressive canary is aborted.
+    Correlates WHAT CHANGED (the diff of the failing deploy) with the runtime
+    symptoms (signals + recent logs), then asks the model to name the culprit.
+    """
+    parts = [f"Canary aborted. Signals: {json.dumps(signals)}."]
+    if code_diff:
+        parts.append("\nWHAT THIS DEPLOY CHANGED (correlate errors with this):\n" + code_diff)
+    parts.append("\nRecent backend logs:\n" + logs[-1500:])
+    base = "\n".join(parts)
+    if client is None:
+        return base
+    try:  # pragma: no cover - needs a key
+        prompt = ("A progressive canary was auto-rolled-back because the backend's "
+                  "error rate rose. Using the CODE CHANGES and the logs below, name "
+                  "the single most likely offending change and the first thing to "
+                  "check, in 3-4 sentences for an on-call engineer.\n\n" + base)
+        return client.ask(prompt).strip() or base
+    except Exception:
+        return base
+
+
 def canary_check(observe, actuator: Actuator, client: LLMClient | None = None,
                  record=telemetry.record_decision) -> bool:
     """Post-deploy gate: healthy -> keep; unhealthy -> roll back with an RCA.
@@ -205,9 +253,12 @@ def _demo() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Idea Board deployment agent")
-    parser.add_argument("mode", nargs="?", default="demo", choices=["demo", "canary", "watch"])
+    parser.add_argument("mode", nargs="?", default="demo",
+                        choices=["demo", "canary", "watch", "rca"])
     parser.add_argument("--endpoint", default="http://frontend")
     parser.add_argument("--namespace", default="idea")
+    parser.add_argument("--prev-sha", default="", help="last-deployed commit (for change-aware RCA)")
+    parser.add_argument("--sha", default="", help="the failing commit being deployed")
     args = parser.parse_args()
 
     if args.mode == "demo":
@@ -219,6 +270,23 @@ def main() -> None:
     collector = SignalCollector(args.endpoint, namespace=args.namespace)
     actuator = K8sActuator(namespace=args.namespace)
     client = maybe_client(spec)
+
+    if args.mode == "rca":  # pragma: no cover - requires a live cluster
+        # Progressive canary was aborted by Argo Rollouts — explain why, correlating
+        # the code change of the failing deploy with the runtime symptoms.
+        import subprocess
+        signals = collector.snapshot()
+        try:
+            logs = subprocess.run(
+                ["kubectl", "logs", "-n", args.namespace, "-l", "app=backend", "--tail=100"],
+                capture_output=True, text=True).stdout
+        except Exception:
+            logs = ""
+        code_diff = git_change_summary(args.prev_sha, args.sha)
+        print("\n===== 🤖 Canary RCA (change-aware) =====")
+        print(rollout_rca(signals, logs, code_diff, client))
+        print("========================================")
+        return
 
     if args.mode == "canary":  # pragma: no cover - requires a live cluster
         # Verify the just-shipped release; roll back with an RCA if it's unhealthy.

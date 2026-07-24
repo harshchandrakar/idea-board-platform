@@ -1,8 +1,10 @@
 name: Deploy backend
-# Ships ONLY the backend: build image -> push GHCR -> Helm-upgrade just the backend
-# (readiness-gated, auto-rollback on failure via --atomic) -> then the AI agent
-# runs a CANARY health check and rolls back with a plain-English RCA if the app is
-# actually broken. (Infra must exist first — run "Infra — provision cluster".)
+# Ships the backend. Two modes:
+#   progressive_canary = off (default): rolling deploy, readiness-gated + --atomic,
+#     then a kubectl-based AI health check that rolls back with an RCA if broken.
+#   progressive_canary = on: Argo Rollouts shifts traffic 20% -> 50% -> 100% with
+#     Prometheus success-rate analysis between steps; on abort it auto-rolls-back
+#     and the AI writes the root-cause. Requires Argo Rollouts + Prometheus (CANARY.md).
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +13,11 @@ on:
         type: choice
         options: [gcp, aws]
         default: gcp
+      progressive_canary:
+        description: "on = Argo Rollouts progressive canary; off = rolling deploy"
+        type: choice
+        options: ["off", "on"]
+        default: "off"
 
 jobs:
   deploy:
@@ -21,9 +28,11 @@ jobs:
       id-token: write
     env:
       SHA: ${{ github.sha }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # for the RCA summary (optional)
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history so the RCA can diff the failing commit
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Install agent deps
@@ -68,31 +77,63 @@ jobs:
         if: ${{ inputs.cloud == 'aws' }}
         run: aws eks update-kubeconfig --name idea-board --region "${{ secrets.AWS_REGION }}"
 
-      # --- rollout (readiness-gated; --atomic auto-reverts if pods never get ready) ---
+      # capture the currently-running backend version so the RCA can diff against it
+      - name: Record current version (for change-aware RCA)
+        if: ${{ inputs.progressive_canary == 'on' }}
+        run: |
+          IMG=$(kubectl get rollout backend -n idea -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+          echo "PREV_SHA=${IMG##*:}" >> "$GITHUB_ENV"
+          echo "previously-deployed backend: ${IMG:-none}"
+
+      # --- deploy ---
       - name: Helm upgrade (backend)
         run: |
-          helm upgrade --install idea deploy/helm -n idea --create-namespace \
-            --set image.backend="$REG/backend:$SHA" \
-            --set image.frontend="$REG/frontend:latest" \
-            --wait --atomic --timeout 5m
+          if [ "${{ inputs.progressive_canary }}" = "on" ]; then
+            # Argo Rollouts drives the progression, so no --wait/--atomic here.
+            helm upgrade --install idea deploy/helm -n idea --create-namespace \
+              --set image.backend="$REG/backend:$SHA" \
+              --set image.frontend="$REG/frontend:latest" \
+              --set rollout.enabled=true --timeout 5m
+          else
+            helm upgrade --install idea deploy/helm -n idea --create-namespace \
+              --set image.backend="$REG/backend:$SHA" \
+              --set image.frontend="$REG/frontend:latest" \
+              --wait --atomic --timeout 5m
+          fi
 
-      # --- AI canary: functional health check beyond readiness; rollback + RCA if bad ---
-      - name: AI canary check (kubectl-based; AI RCA + rollback only if broken)
+      # --- PROGRESSIVE CANARY: watch Argo shift traffic; AI RCA on abort ---
+      - name: Progressive canary (watch + AI RCA)
+        if: ${{ inputs.progressive_canary == 'on' }}
+        run: |
+          echo "Watching the canary shift 20% -> 50% -> 100% (Prometheus-gated)..."
+          for i in $(seq 1 60); do
+            PHASE=$(kubectl get rollout backend -n idea -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+            echo "rollout phase: ${PHASE:-Progressing}"
+            case "$PHASE" in
+              Healthy)  echo "[canary] promoted to 100% ✅"; exit 0 ;;
+              Degraded) echo "[canary] error rate too high -> aborted & rolled back ❌"
+                        python -m ai.agent rca --namespace idea \
+                          --prev-sha "${PREV_SHA:-}" --sha "$SHA" || true
+                        exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "[canary] timed out; current state:"
+          kubectl describe rollout backend -n idea | tail -40 || true
+          exit 1
+
+      # --- ROLLING DEPLOY (default): kubectl health check + AI RCA on failure ---
+      - name: AI canary check (rolling deploy)
+        if: ${{ inputs.progressive_canary == 'off' }}
         run: |
           echo "=== pods ===";      kubectl get pods -n idea -o wide || true
-          echo "=== endpoints ==="; kubectl get endpoints -n idea || true
-
           HEALTHY=1
-          # 1) readiness/availability (reliable from the runner via kubeconfig)
           kubectl rollout status deployment/backend -n idea --timeout=150s || HEALTHY=0
-          # 2) FUNCTIONAL check from INSIDE the cluster — hits the DB-backed endpoint,
-          #    catching problems (e.g. a bad DB connection) the readiness probe misses.
           if [ "$HEALTHY" = "1" ]; then
             kubectl -n idea exec deploy/backend -- \
               python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/ideas', timeout=5)" \
               || HEALTHY=0
           fi
-
           if [ "$HEALTHY" = "1" ]; then
             echo "[canary] app healthy -> keep"; exit 0
           fi

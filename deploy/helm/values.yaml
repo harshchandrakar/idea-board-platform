@@ -33,6 +33,19 @@ autoscaling:
   maxReplicas: 3
   targetCPUUtilizationPercentage: 70
 
+# Progressive canary for the BACKEND via Argo Rollouts (opt-in). When enabled, the
+# backend runs as a Rollout that shifts traffic 20% -> 50% -> 100%, and at each
+# step an AnalysisTemplate queries Prometheus for the success rate. If it drops
+# below successThreshold, Argo aborts and rolls back to the stable version
+# automatically; the deploy workflow then asks the AI for a root-cause summary.
+# Requires the Argo Rollouts controller + Prometheus in the cluster (see CANARY.md).
+rollout:
+  enabled: false
+  replicas: 3                       # need a few replicas for weighting to be meaningful
+  successThreshold: "0.95"          # min fraction of non-5xx responses to keep promoting
+  prometheusAddress: "http://prometheus-server.prometheus.svc.cluster.local"
+  stepPauseSeconds: 30
+
 # Per-pod CPU/memory. `requests` = guaranteed reservation (and the HPA baseline);
 # `limits` = hard ceiling. Small on purpose for the Idea Board.
 resources:

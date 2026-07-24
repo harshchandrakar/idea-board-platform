@@ -1,3 +1,7 @@
+{{- if not .Values.rollout.enabled }}
+# Plain Deployment (default). When rollout.enabled = true, the backend is an Argo
+# Rollout instead (see backend-rollout.yaml) — so this is skipped to avoid two
+# controllers owning the same pods.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,7 +34,10 @@ spec:
             httpGet: { path: /api/health, port: {{ .Values.service.backendPort }} }
             initialDelaySeconds: 5
             periodSeconds: 10
+{{- end }}
 ---
+# Service is always present — it fronts either the Deployment or the Rollout pods
+# (both carry the app: backend label), so nothing else has to change.
 apiVersion: v1
 kind: Service
 metadata:

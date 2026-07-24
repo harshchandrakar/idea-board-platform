@@ -1,0 +1,29 @@
+{{- if .Values.rollout.enabled }}
+# The canary's gate: between traffic steps, Argo runs this and only promotes if
+# the backend's success rate (non-5xx / total) stays >= successThreshold.
+# The metric http_requests_total comes from the backend's /metrics endpoint
+# (prometheus-fastapi-instrumentator), scraped by Prometheus.
+#
+# NOTE: the label used to scope to the backend (here `namespace`+`handler`) must
+# match how YOUR Prometheus labels the target. Adjust the query if your scrape
+# config adds different labels (e.g. `service`, `app`, `pod`). See CANARY.md.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: backend-success-rate
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  metrics:
+    - name: success-rate
+      interval: 20s
+      count: 3                      # sample 3 times per analysis step
+      failureLimit: 1              # one bad sample fails the step -> abort + rollback
+      successCondition: "result >= {{ .Values.rollout.successThreshold }}"
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.prometheusAddress | quote }}
+          query: |
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}",status!~"5.."}[1m]))
+            /
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}"}[1m]))
+{{- end }}
