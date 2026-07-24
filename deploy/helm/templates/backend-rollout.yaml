@@ -1,0 +1,51 @@
+{{- if .Values.rollout.enabled }}
+# The backend as an Argo Rollout: a REAL progressive canary. On each new image,
+# Argo shifts traffic 20% -> 50% -> 100%, running a Prometheus success-rate
+# analysis between steps. If the analysis fails (error rate climbs), Argo aborts
+# and rolls back to the previous version automatically — no traffic left on the
+# bad version. This replaces the plain Deployment when rollout.enabled = true.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: backend
+  labels: {{- include "idea.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.rollout.replicas }}
+  selector:
+    matchLabels: { app: backend }
+  template:
+    metadata:
+      labels: { app: backend }
+    spec:
+      containers:
+        - name: backend
+          image: {{ .Values.image.backend | quote }}
+          ports:
+            - containerPort: {{ .Values.service.backendPort }}
+          {{- if .Values.databaseUrl }}
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.databaseUrl | quote }}
+          {{- end }}
+          resources: {{- toYaml .Values.resources.backend | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /api/health, port: {{ .Values.service.backendPort }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+  strategy:
+    canary:
+      # No service mesh needed: Argo approximates the weight by pod count, and the
+      # backend Service load-balances across stable + canary pods.
+      steps:
+        - setWeight: 20
+        - pause: { duration: {{ .Values.rollout.stepPauseSeconds }} }
+        - analysis:
+            templates:
+              - templateName: backend-success-rate
+        - setWeight: 50
+        - pause: { duration: {{ .Values.rollout.stepPauseSeconds }} }
+        - analysis:
+            templates:
+              - templateName: backend-success-rate
+        - setWeight: 100
+{{- end }}

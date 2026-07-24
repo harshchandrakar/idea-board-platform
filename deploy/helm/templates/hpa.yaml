@@ -10,8 +10,13 @@ metadata:
   labels: {{- include "idea.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
+    {{- if .Values.rollout.enabled }}
+    apiVersion: argoproj.io/v1alpha1   # target the Rollout when canary is on
+    kind: Rollout
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
+    {{- end }}
     name: backend
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}

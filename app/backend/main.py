@@ -99,9 +99,13 @@ def delete_idea(idea_id: int):
 # --- Optional observability: expose Prometheus metrics if the package is present.
 # Guarded so the app runs fine without the extra dependency (see Part G).
 try:  # pragma: no cover - optional dependency
-    from prometheus_fastapi_instrumentator import Instrumentator
+    from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
-    Instrumentator().instrument(app).expose(app)  # adds GET /metrics
+    _inst = Instrumentator().instrument(app)
+    # Explicit http_requests_total{method,handler,status} — the counter the canary
+    # analysis queries (success rate = non-5xx / total). Status is the code string.
+    _inst.add(metrics.requests())
+    _inst.expose(app)  # adds GET /metrics
 except Exception:  # pragma: no cover
     pass
 
