@@ -86,7 +86,13 @@ jobs:
           [ "${{ inputs.cloud }}" = "gcp" ] && VAR="-var=project_id=${GOOGLE_CLOUD_PROJECT}"
           terraform fmt
           if [ "${{ inputs.action }}" = "destroy" ]; then
-            terraform destroy -auto-approve $VAR
+            # First pass removes node pool + cluster + subnet, then usually fails on
+            # the VPC because GKE left orphaned load-balancer resources behind.
+            terraform destroy -auto-approve $VAR || echo "[infra] first destroy pass incomplete — cleaning GKE orphans"
+            if [ "${{ inputs.cloud }}" = "gcp" ]; then
+              bash ../../../scripts/gcp_lb_cleanup.sh    # delete orphaned k8s* LB resources
+              terraform destroy -auto-approve $VAR       # now the VPC deletes
+            fi
             exit 0
           fi
           terraform validate
