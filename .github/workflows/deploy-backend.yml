@@ -81,7 +81,14 @@ jobs:
         run: |
           kubectl -n idea port-forward svc/backend 8080:8000 >/tmp/pf.log 2>&1 &
           PF=$!
-          sleep 6
+          # wait until the port-forward + app are actually reachable (up to ~60s),
+          # so a slow-to-establish tunnel isn't mistaken for an unhealthy app.
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/health 2>/dev/null || true)
+            echo "health probe $i -> ${code:-none}"
+            [ "$code" = "200" ] && break
+            sleep 3
+          done
           set +e
           python -m ai.agent canary --endpoint http://localhost:8080 --namespace idea
           RC=$?

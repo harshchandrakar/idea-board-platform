@@ -54,6 +54,18 @@ def test_canary_check_rolls_back_when_unhealthy():
     assert kept is False and act.calls == ["rollback"]
 
 
+class _RaisingActuator:
+    def execute(self, action, params):
+        raise RuntimeError("no prior revision")  # e.g. first deploy
+
+
+def test_canary_check_tolerates_rollback_failure():
+    # a first-deploy rollback failure must not crash — just report unhealthy
+    kept = canary_check(lambda: {"health_ok": False}, _RaisingActuator(),
+                        client=None, record=_silent)
+    assert kept is False
+
+
 @pytest.mark.parametrize("signals,expected", [
     ({"pod_reason": "ImagePullBackOff"}, "redeploy"),
     ({"pod_reason": "Pending"}, "scale_nodes"),

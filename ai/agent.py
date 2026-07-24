@@ -90,7 +90,11 @@ def canary_check(observe, actuator: Actuator, client: LLMClient | None = None,
         return True
     reason = rca_summary(client, signals)
     print(f"[agent] canary UNHEALTHY -> rollback\n[agent] RCA: {reason}")
-    actuator.execute("rollback", {})
+    try:
+        actuator.execute("rollback", {})
+    except Exception as e:  # noqa: BLE001 - e.g. no prior revision on a first deploy
+        print(f"[agent] rollback could not run ({e}); likely the first release "
+              f"(nothing to revert to). Leaving it for a human.")
     record(signals, {"action": "rollback", "diagnosis": reason, "source": "agent"},
            "allowed", {"verified": False})
     return False
