@@ -99,3 +99,38 @@ jobs:
           kubectl logs deploy/frontend -n idea --tail=80 || true
           python -m ai.agent canary --endpoint http://localhost:8000 --namespace idea || true
           exit 1
+
+      # --- surface the public URL (Ingress IP) in the log + run Summary ---
+      - name: Get public URL
+        run: |
+          echo "Waiting for the Ingress public IP (first deploy can take 5-10 min)..."
+          IP=""
+          for i in $(seq 1 60); do
+            IP=$(kubectl get ingress idea-board -n idea -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            [ -n "$IP" ] && break
+            sleep 10
+          done
+          if [ -n "$IP" ]; then
+            URL="http://${IP}"
+            echo "=============================================="
+            echo "  🌍 App is publicly accessible at: $URL"
+            echo "=============================================="
+            {
+              echo "## 🌍 Deployment live"
+              echo ""
+              echo "**Public URL:** [$URL]($URL)"
+              echo ""
+              echo "_First load may take a minute while the load balancer finishes health checks._"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Ingress IP not assigned yet. Check later with:"
+            echo "  kubectl get ingress -n idea"
+            {
+              echo "## ⏳ Deployment done — URL still provisioning"
+              echo ""
+              echo "The load balancer is still being created. Get the URL with:"
+              echo '```'
+              echo "kubectl get ingress -n idea"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -6,7 +6,10 @@ metadata:
   labels: {{- include "idea.labels" . | nindent 4 }}
 spec:
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    # no host set -> match ALL traffic to the load balancer's IP (public by IP)
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end }}
       http:
         paths:
           - path: /api
